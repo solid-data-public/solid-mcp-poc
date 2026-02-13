@@ -10,6 +10,7 @@ def build_crew(
     user_question: str,
     *,
     gemini_api_key: str,
+    semantic_layer_id: str,
     model: str = "gemini/gemini-2.0-flash",
 ) -> Crew:
     """Build a two-agent crew: SQL Analyst (with MCP text2sql) -> Reporter.
@@ -74,7 +75,7 @@ def build_crew(
         description=(
             f'Use the text2sql MCP tool to generate sql query using the following user question as input.'
             f' The question is: \n\n"{user_question}"\n\n'
-            f'The semantic layer id: 851b4156-e0ea-460b-b6f9-cf3f428e95b5' # TODO: Make this dynamic
+            f'The semantic layer id: {semantic_layer_id}\n\n'
             f'Return the SQL query and a one-sentence explanation of what it does.'
         ),
         expected_output="The SQL query and a brief explanation of what it retrieves.",

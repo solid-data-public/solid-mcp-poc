@@ -29,6 +29,11 @@ class Settings(BaseSettings):
         description="SolidData MCP server URL.",
         alias="MCP_SERVER_URL",
     )
+    semantic_layer_id: str = Field(
+        default="851b4156-e0ea-460b-b6f9-cf3f428e95b5",
+        description="Semantic layer ID for SolidData text2sql.",
+        alias="SEMANTIC_LAYER_ID",
+    )
 
     # ── LLM (Gemini) ──────────────────────────────────────
     gemini_api_key: str = Field(

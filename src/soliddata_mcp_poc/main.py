@@ -40,6 +40,7 @@ def run() -> None:
         mcp_server_url=settings.mcp_server_url,
         user_question=question,
         gemini_api_key=settings.gemini_api_key,
+        semantic_layer_id=settings.semantic_layer_id,
         model=settings.model,
     )
     try:

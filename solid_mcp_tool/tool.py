@@ -7,6 +7,7 @@ query and explanation only.
 
 Environment variables (set in .env or CrewAI AMP):
   SOLIDDATA_MANAGEMENT_KEY  — SolidData management key (required, MCP-enabled).
+  SEMANTIC_LAYER_ID        — Optional. Semantic layer ID for text2sql. Default: 851b4156-e0ea-460b-b6f9-cf3f428e95b5
   AUTH_ENDPOINT            — Optional. Default: production SolidData auth URL.
   MCP_SERVER_URL           — Optional. Default: production SolidData MCP URL.
 """
@@ -70,7 +71,7 @@ class SolidText2SQLInput(BaseModel):
         description="Natural-language question to convert into a SQL query (e.g. 'How many users signed up last month?').",
     )
     semantic_layer_id: str = Field(
-        default="851b4156-e0ea-460b-b6f9-cf3f428e95b5",
+        default_factory=lambda: os.environ.get("SEMANTIC_LAYER_ID", "851b4156-e0ea-460b-b6f9-cf3f428e95b5"),
         description="Semantic layer ID for the SolidData MCP server.",
     )
 
@@ -91,11 +92,14 @@ class SolidText2SQLTool(BaseTool):
     def _run(
         self,
         question: str,
-        semantic_layer_id: str = "851b4156-e0ea-460b-b6f9-cf3f428e95b5",
+        semantic_layer_id: str | None = None,
     ) -> str:
         """Call Solid MCP text2sql and return the SQL + explanation."""
+        layer_id = semantic_layer_id or os.environ.get(
+            "SEMANTIC_LAYER_ID", "851b4156-e0ea-460b-b6f9-cf3f428e95b5"
+        )
         return asyncio.run(
-            _call_solid_text2sql(question=question, semantic_layer_id=semantic_layer_id)
+            _call_solid_text2sql(question=question, semantic_layer_id=layer_id)
         )
 
 
