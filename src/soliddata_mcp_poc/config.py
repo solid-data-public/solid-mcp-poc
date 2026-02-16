@@ -46,6 +46,30 @@ class Settings(BaseSettings):
         alias="MODEL",
     )
 
+    # ── Snowflake MCP (optional; when set, crew executes SQL and reporter analyzes results) ─
+    snowflake_mcp_server_url: str | None = Field(
+        default=None,
+        description="Snowflake MCP server base URL (e.g. https://your-account.snowflakecomputing.com).",
+        alias="SNOWFLAKE_MCP_SERVER_URL",
+    )
+    snowflake_database: str | None = Field(default=None, description="Snowflake database name.", alias="SNOWFLAKE_DATABASE")
+    snowflake_schema: str | None = Field(default=None, description="Snowflake schema name.", alias="SNOWFLAKE_SCHEMA")
+    snowflake_mcp_server_name: str | None = Field(
+        default=None,
+        description="Name of the MCP server object in Snowflake.",
+        alias="SNOWFLAKE_MCP_SERVER_NAME",
+    )
+    snowflake_access_token: str | None = Field(
+        default=None,
+        description="OAuth access token for Snowflake MCP.",
+        alias="SNOWFLAKE_ACCESS_TOKEN",
+    )
+    snowflake_sql_tool_name: str = Field(
+        default="sql_exec_tool",
+        description="MCP tool name for SQL execution (e.g. sql_exec_tool).",
+        alias="SNOWFLAKE_SQL_TOOL_NAME",
+    )
+
 
 def get_settings() -> Settings:
     """Return validated application settings."""

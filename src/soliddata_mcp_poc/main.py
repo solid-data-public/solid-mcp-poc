@@ -34,7 +34,7 @@ def run() -> None:
     print(f'\nQuestion: "{question}"\n')
     print("Starting crew...\n")
 
-    # 3. Build and run the crew
+    # 3. Build and run the crew (Snowflake step added when Snowflake env vars are set)
     crew = build_crew(
         mcp_token=token,
         mcp_server_url=settings.mcp_server_url,
@@ -42,6 +42,12 @@ def run() -> None:
         gemini_api_key=settings.gemini_api_key,
         semantic_layer_id=settings.semantic_layer_id,
         model=settings.model,
+        snowflake_mcp_server_url=settings.snowflake_mcp_server_url,
+        snowflake_database=settings.snowflake_database,
+        snowflake_schema=settings.snowflake_schema,
+        snowflake_mcp_server_name=settings.snowflake_mcp_server_name,
+        snowflake_access_token=settings.snowflake_access_token,
+        snowflake_sql_tool_name=settings.snowflake_sql_tool_name,
     )
     try:
         result = crew.kickoff()
