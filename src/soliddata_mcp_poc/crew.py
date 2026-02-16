@@ -1,11 +1,11 @@
-"""CrewAI crew that uses the SolidData MCP server for text2sql and Snowflake for execution."""
+"""CrewAI crew that uses the SolidData MCP server for text2sql and Snowflake connector for execution."""
 
 from typing import Optional
 
 from crewai import Agent, Crew, LLM, Process, Task
 from crewai.mcp import MCPServerHTTP
 
-from soliddata_mcp_poc.snowflake_mcp_tool import SnowflakeMCPTool
+from soliddata_mcp_poc.snowflake_connector_tool import SnowflakeConnectorTool
 
 
 def build_crew(
@@ -16,39 +16,30 @@ def build_crew(
     gemini_api_key: str,
     semantic_layer_id: str,
     model: str = "gemini/gemini-2.0-flash",
-    # Optional Snowflake MCP: when set, crew runs SQL in Snowflake and reporter analyzes results.
-    snowflake_mcp_server_url: Optional[str] = None,
+    # Optional Snowflake (connector with username/password only)
+    snowflake_account: Optional[str] = None,
+    snowflake_user: Optional[str] = None,
+    snowflake_password: Optional[str] = None,
     snowflake_database: Optional[str] = None,
     snowflake_schema: Optional[str] = None,
-    snowflake_mcp_server_name: Optional[str] = None,
-    snowflake_access_token: Optional[str] = None,
-    snowflake_sql_tool_name: str = "sql_exec_tool",
+    snowflake_warehouse: Optional[str] = None,
+    snowflake_role: Optional[str] = None,
 ) -> Crew:
     """Build the crew: SQL Analyst (Solid MCP text2sql) -> [optional: Snowflake Executor] -> Reporter.
 
     Flow:
     1. SQL Analyst uses Solid MCP text2sql to generate SQL from the user question.
-    2. If Snowflake config is provided: an executor agent runs that SQL in Snowflake and returns results.
-    3. Reporter explains the query and, when Snowflake was used, analyzes the actual query results
-       for the stakeholder; otherwise explains what the SQL does.
-
-    Args:
-        mcp_token: Bearer token obtained from SolidData auth.
-        mcp_server_url: SolidData MCP server URL.
-        user_question: The natural-language question to convert to SQL.
-        snowflake_*: When all are set, adds a step to execute the generated SQL in Snowflake.
-
-    Returns:
-        A ready-to-kickoff Crew instance.
+    2. If Snowflake connector config is provided: an executor runs that SQL via the Snowflake Python connector and returns results.
+    3. Reporter explains the query and, when Snowflake was used, analyzes the actual query results; otherwise explains what the SQL does.
     """
+    # Shared LLM with enough output space to avoid truncation/empty responses (e.g. Snowflake result passthrough).
     llm = LLM(
         model=model,
         api_key=gemini_api_key,
         temperature=0.3,
+        max_tokens=8192,
     )
 
-    # ── MCP connection ───────────────────────────────────
-    # MCP requires "Bearer {token}". mcp_token is the raw token from the auth exchange (management key → token); we always send it as Bearer {mcp_token}.
     mcp = MCPServerHTTP(
         url=mcp_server_url,
         headers={"Authorization": f"Bearer {mcp_token}"},
@@ -56,7 +47,6 @@ def build_crew(
         cache_tools_list=True,
     )
 
-    # ── Agents ───────────────────────────────────────────
     sql_analyst = Agent(
         role="SQL Data Analyst",
         goal=(
@@ -73,33 +63,42 @@ def build_crew(
         verbose=True,
     )
 
-    use_snowflake = all(
-        [
-            snowflake_mcp_server_url,
-            snowflake_database,
-            snowflake_schema,
-            snowflake_mcp_server_name,
-        ]
+    use_snowflake = bool(
+        snowflake_account
+        and snowflake_user
+        and snowflake_password
+        and snowflake_database
+        and snowflake_schema
+        and snowflake_warehouse
     )
 
     if use_snowflake:
-        snowflake_tool = SnowflakeMCPTool(
-            mcp_server_url=snowflake_mcp_server_url,
+        snowflake_tool = SnowflakeConnectorTool(
+            account=snowflake_account,
+            user=snowflake_user,
+            password=snowflake_password,
             database=snowflake_database,
             schema=snowflake_schema,
-            server_name=snowflake_mcp_server_name,
-            access_token=snowflake_access_token,
+            warehouse=snowflake_warehouse,
+            role=snowflake_role,
+        )
+        # Lower temperature for deterministic passthrough of tool output (reduces empty LLM responses).
+        executor_llm = LLM(
+            model=model,
+            api_key=gemini_api_key,
+            temperature=0.1,
+            max_tokens=8192,
         )
         sql_executor = Agent(
             role="Snowflake SQL Executor",
-            goal="Execute the SQL query from the previous step in Snowflake and return the raw results.",
+            goal="Execute the SQL from the previous step in Snowflake and return the raw tool output in full.",
             backstory=(
-                "You run SQL in Snowflake via the snowflake_mcp_tool. You receive the exact SQL "
-                "from the SQL Analyst. You call the tool with tool_name "
-                f"'{snowflake_sql_tool_name}' and arguments {{'query': '<the SQL>}}. "
-                "You return the full tool response without summarizing."
+                "You run SQL in Snowflake via the snowflake_sql_executor tool. You receive the exact SQL "
+                "from the SQL Analyst. You call the tool with the single argument 'query' set to the exact SQL string. "
+                "You must return the complete tool response (JSON rows or error) in your final answer — never summarize, "
+                "truncate, or return an empty response."
             ),
-            llm=llm,
+            llm=executor_llm,
             tools=[snowflake_tool],
             verbose=True,
         )
@@ -120,7 +119,6 @@ def build_crew(
         verbose=True,
     )
 
-    # ── Tasks ────────────────────────────────────────────
     generate_sql = Task(
         description=(
             f'Use the text2sql MCP tool to generate sql query using the following user question as input.'
@@ -137,11 +135,14 @@ def build_crew(
             description=(
                 "Using the SQL query from the previous task output:\n"
                 "1. Extract the exact SQL statement (only the SQL, no markdown or explanation).\n"
-                f"2. Call the snowflake_mcp_tool with tool_name '{snowflake_sql_tool_name}' "
-                "and arguments {\"query\": \"<the exact SQL>\"}.\n"
-                "3. Return the full result returned by the tool (do not summarize or truncate)."
+                "2. Call the snowflake_sql_executor tool with argument \"query\" set to the exact SQL string.\n"
+                "3. In your final answer, return the complete tool output (full JSON or error). "
+                "Your response must not be empty — include the entire tool result."
             ),
-            expected_output="The raw result from executing the SQL in Snowflake (rows/data or error message).",
+            expected_output=(
+                "The complete raw result from snowflake_sql_executor (full JSON array of rows or error object). "
+                "Never an empty or truncated response."
+            ),
             agent=sql_executor,
             context=[generate_sql],
         )
@@ -163,7 +164,6 @@ def build_crew(
         context=[generate_sql, execute_sql] if use_snowflake else [generate_sql],
     )
 
-    # ── Crew ─────────────────────────────────────────────
     agents = [sql_analyst, sql_executor, reporter] if use_snowflake else [sql_analyst, reporter]
     tasks = [generate_sql, execute_sql, explain_and_report] if use_snowflake else [generate_sql, explain_and_report]
     return Crew(

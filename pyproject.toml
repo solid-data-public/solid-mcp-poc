@@ -10,6 +10,7 @@ dependencies = [
     "httpx",
     "pydantic-settings>=2.0",
     "python-dotenv",
+    "snowflake-connector-python>=3.0",
 ]
 
 [project.scripts]

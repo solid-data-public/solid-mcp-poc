@@ -15,13 +15,11 @@ def run() -> None:
     """Authenticate, build the crew, and kick it off."""
     settings = get_settings()
 
-    # 1. Authenticate with SolidData to get an MCP bearer token
     print("\n=== SolidData MCP POC ===\n")
     print("Authenticating with SolidData...")
     token = get_mcp_token()
     print("Authentication successful.\n")
 
-    # 2. Get the user's question (CLI arg or interactive prompt)
     if len(sys.argv) > 1:
         question = " ".join(sys.argv[1:])
     else:
@@ -34,7 +32,6 @@ def run() -> None:
     print(f'\nQuestion: "{question}"\n')
     print("Starting crew...\n")
 
-    # 3. Build and run the crew (Snowflake step added when Snowflake env vars are set)
     crew = build_crew(
         mcp_token=token,
         mcp_server_url=settings.mcp_server_url,
@@ -42,12 +39,13 @@ def run() -> None:
         gemini_api_key=settings.gemini_api_key,
         semantic_layer_id=settings.semantic_layer_id,
         model=settings.model,
-        snowflake_mcp_server_url=settings.snowflake_mcp_server_url,
+        snowflake_account=settings.snowflake_account,
+        snowflake_user=settings.snowflake_user,
+        snowflake_password=settings.snowflake_password,
         snowflake_database=settings.snowflake_database,
         snowflake_schema=settings.snowflake_schema,
-        snowflake_mcp_server_name=settings.snowflake_mcp_server_name,
-        snowflake_access_token=settings.snowflake_access_token,
-        snowflake_sql_tool_name=settings.snowflake_sql_tool_name,
+        snowflake_warehouse=settings.snowflake_warehouse,
+        snowflake_role=settings.snowflake_role,
     )
     try:
         result = crew.kickoff()
@@ -62,7 +60,6 @@ def run() -> None:
             ) from e
         raise
 
-    # 4. Print results
     print("\n" + "=" * 60)
     print("RESULT")
     print("=" * 60)

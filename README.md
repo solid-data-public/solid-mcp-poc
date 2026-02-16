@@ -2,8 +2,8 @@
 
 Minimal **demonstration** of [Solid](https://getsolid.ai)'s MCP server with [CrewAI](https://crewai.com):
 
-- **What it does:** You ask a natural-language question → the crew calls Solid’s MCP **text2sql** tool → Solid returns the generated SQL. Optionally that SQL is executed in Snowflake (when configured), and the Reporter analyzes the actual query results; otherwise the Reporter explains what the SQL does. All output is **printed in the terminal**.
-- **Snowflake (optional):** When Snowflake MCP env vars are set, the flow adds a step to run the generated SQL in Snowflake; the Reporter then analyzes the **data** returned, not just the query.
+- **What it does:** You ask a natural-language question → the crew calls Solid’s MCP **text2sql** tool → Solid returns the generated SQL. Optionally that SQL is executed in Snowflake via the **Snowflake Python connector** (username/password); the Reporter then analyzes the actual query results. Otherwise the Reporter explains what the SQL does. All output is **printed in the terminal**.
+- **Snowflake (optional):** When Snowflake connector env vars are set, the flow runs the generated SQL in Snowflake using the connector (no PAT, no MCP API, no network policy); the Reporter analyzes the **data** returned.
 
 Use this repo to see the end-to-end flow (auth → MCP → SQL + analysis) and to publish the **Solid MCP tool** as a CrewAI custom tool so any agent can use it.
 
@@ -25,7 +25,7 @@ Use this repo to see the end-to-end flow (auth → MCP → SQL + analysis) and t
   - [2.1 What's in `solid_mcp_tool/`](#21-whats-in-solid_mcp_tool)
   - [2.2 Publish the Tool to CrewAI (CLI)](#22-publish-the-tool-to-crewai-cli)
 - [Project Structure](#project-structure)
-- [Snowflake MCP setup](#snowflake-mcp-setup)
+- [Snowflake setup](#snowflake-setup)
 - [Troubleshooting](#troubleshooting)
 - [References](#references)
 
@@ -36,7 +36,7 @@ Use this repo to see the end-to-end flow (auth → MCP → SQL + analysis) and t
 ### Crew flow (with optional Snowflake execution)
 
 1. **SQL Analyst** — Uses Solid MCP **text2sql** to turn the user question into a SQL query and a short explanation.
-2. **Snowflake SQL Executor** *(only when Snowflake MCP is configured)* — Takes the SQL from step 1, runs it in Snowflake via the Snowflake MCP tool, and returns the raw query results.
+2. **Snowflake SQL Executor** *(only when Snowflake is configured)* — Takes the SQL from step 1, runs it in Snowflake via the **Snowflake Python connector** (username/password), and returns the raw query results.
 3. **Reporter** — If step 2 ran: summarizes the **query results** and writes a stakeholder report. If step 2 was skipped: explains what the SQL does in plain language.
 
 ```
@@ -50,8 +50,8 @@ Question (natural language)
          │
          ▼
 ┌──────────────────┐   (optional)        ┌─────────────────────┐
-│  SQL Executor    │ ──────────────────► │  Snowflake MCP       │
-│  (Agent 2)       │   execute SQL       │  (sql_exec_tool)     │
+│  SQL Executor    │ ──────────────────► │  Snowflake          │
+│  (Agent 2)       │   execute SQL       │  Python connector   │
 └────────┬─────────┘ ◄────────────────── └─────────────────────┘
          │             query results
          ▼
@@ -64,8 +64,8 @@ Question (natural language)
    Result printed in terminal only
 ```
 
-- The **Solid MCP tool** (`solid_mcp_tool/`) is used only by the SQL Analyst to call Solid's text2sql; it is not modified by the crew flow.
-- The **Snowflake MCP tool** (`src/soliddata_mcp_poc/snowflake_mcp_tool.py`) is used only in the crew flow to execute the generated SQL and return results to the Reporter.
+- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and uses the **text2sql** tool from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool for use in other crews or AMP; this demo does not use it.
+- **Snowflake** is used only via the **Snowflake Python connector** (`snowflake_connector_tool.py`) with username/password; no Snowflake MCP or PAT. Query results are capped at 1000 rows (configurable on the tool) to keep context manageable.
 
 ---
 
@@ -104,15 +104,15 @@ Simplest path: **ask a question → see the SQL response from Solid and the agen
 ### How It Works
 
 1. **Auth** — `auth.py` exchanges `SOLIDDATA_MANAGEMENT_KEY` for a bearer token (SolidData auth API).
-2. **MCP** — `crew.py` creates an `MCPServerHTTP` client for the SolidData MCP server with that token.
-3. **SQL Analyst** — Uses the MCP **text2sql** tool to get a SQL query + short explanation.
-4. **Snowflake Executor** *(optional)* — If Snowflake MCP is configured, runs that SQL in Snowflake and returns query results.
+2. **MCP** — `crew.py` creates an `MCPServerHTTP` client for the SolidData MCP server with that token and attaches it to the SQL Analyst agent.
+3. **SQL Analyst** — Uses the MCP **text2sql** tool (from that server) to get a SQL query + short explanation.
+4. **Snowflake Executor** *(optional)* — If Snowflake connector is configured, runs that SQL in Snowflake and returns query results.
 5. **Reporter** — If Snowflake ran: summarizes the **query results** and writes a stakeholder report. Otherwise: explains in plain language what the query does.
 6. **Output** — Result is **printed in the terminal only**.
 
 ### 1.1 Prerequisites
 
-- Python 3.10–3.13
+- Python 3.10–3.13 (see `pyproject.toml` for the exact supported range)
 - **SolidData management key** (MCP-enabled)
 - **Google Gemini API key** (e.g. [Google AI Studio](https://aistudio.google.com/apikey))
 - Optional: [uv](https://docs.astral.sh/uv/)
@@ -123,24 +123,12 @@ From the **project root** (where `pyproject.toml` and `.env` live):
 
 ```bash
 cp .env.example .env
-# Edit .env: set SOLIDDATA_MANAGEMENT_KEY and GEMINI_API_KEY
+# Edit .env: set SOLIDDATA_MANAGEMENT_KEY and GEMINI_API_KEY (required)
 ```
 
-Optional: `AUTH_ENDPOINT` and `MCP_SERVER_URL` for SolidData **dev** (defaults are production).
+Optional in `.env`: `MODEL`, `SEMANTIC_LAYER_ID` (defaults in app); `AUTH_ENDPOINT` and `MCP_SERVER_URL` for SolidData **dev** (defaults are production).
 
-**Snowflake (optional, for executing SQL and reporting on results):**  
-To run the generated SQL in Snowflake and have the Reporter analyze the data, set in `.env`:
-
-- `SNOWFLAKE_MCP_SERVER_URL` — e.g. `https://your-account.snowflakecomputing.com`
-- `SNOWFLAKE_DATABASE` — database where the MCP server is located
-- `SNOWFLAKE_SCHEMA` — schema name
-- `SNOWFLAKE_MCP_SERVER_NAME` — name of the MCP server object
-- `SNOWFLAKE_ACCESS_TOKEN` — OAuth access token or Programmatic Access Token (PAT) for Snowflake MCP
-- `SNOWFLAKE_SQL_TOOL_NAME` — (optional) MCP tool name for SQL execution; default `sql_exec_tool`
-
-If any of the first four are missing, the crew runs without the Snowflake step (SQL only, Reporter explains the query).
-
-See [Snowflake MCP setup](#snowflake-mcp-setup) below for how to create the MCP server and access token in Snowflake.
+**Snowflake (optional):** To run the generated SQL in Snowflake and have the Reporter analyze the data, set in `.env`: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, and `SNOWFLAKE_SCHEMA` (and optionally `SNOWFLAKE_ROLE`). The app uses the **Snowflake Python connector** with username/password only—no PAT, no MCP API, no network policy or IP whitelisting. See [Snowflake setup](#snowflake-setup).
 
 ### 1.3 Run
 
@@ -149,7 +137,8 @@ See [Snowflake MCP setup](#snowflake-mcp-setup) below for how to create the MCP 
 ```bash
 uv sync
 uv run soliddata_mcp_poc "How many users signed up last month?"
-# Or interactive:
+# Or: uv run run_crew "Your question here"
+# Interactive (prompt for question):
 uv run soliddata_mcp_poc
 ```
 
@@ -160,12 +149,13 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 soliddata_mcp_poc "How many users signed up last month?"
+# Or: run_crew "Your question here"
 ```
 
 ### 1.4 What You See
 
 1. “Authenticating with SolidData…” then “Authentication successful.”
-2. Crew runs: SQL Analyst calls Solid MCP **text2sql**; if Snowflake is configured, the executor runs the SQL in Snowflake and the Reporter summarizes the results; otherwise the Reporter explains what the query does.
+2. Crew runs: SQL Analyst calls Solid MCP **text2sql**; if Snowflake connector is configured, the executor runs the SQL in Snowflake and the Reporter summarizes the results; otherwise the Reporter explains what the query does.
 3. **Result is printed in the terminal only** (no file output).
 
 
@@ -214,140 +204,52 @@ Do these steps in a **normal terminal** (not the IDE), in a new directory (e.g. 
    ```
    Use `crewai tool publish --public` to publish as a public tool.
 
-After publishing, other projects can install it with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` (and optionally `AUTH_ENDPOINT`, `MCP_SERVER_URL`) in that project or in CrewAI AMP for the tool.
+After publishing, other projects can install it with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` in that project or in CrewAI AMP; optionally set `AUTH_ENDPOINT`, `MCP_SERVER_URL`, and `SEMANTIC_LAYER_ID` for the tool.
 
 ---
 
 ## Project Structure
 
 ```
-soliddata_mcp_poc/
+solid-mcp-poc/                  # Repo root
 ├── .env.example
 ├── pyproject.toml
 ├── README.md
 ├── uv.lock
-├── solid_mcp_tool/           # CrewAI custom tool (publish separately)
+├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
-│   ├── tool.py               # Copy this into crewai tool create project
+│   ├── tool.py                 # Copy this into crewai tool create project
 │   └── README.md
 └── src/
-    └── soliddata_mcp_poc/    # Tools to Demonstrate MCP with CrewAI in a Terminal
+    └── soliddata_mcp_poc/      # Demo app: auth → MCP crew → terminal output
         ├── __init__.py
-        ├── main.py              # Entry: auth → crew → print result
-        ├── auth.py              # SolidData management key → bearer token
-        ├── config.py            # Settings from .env
-        ├── crew.py              # Crew: SQL Analyst → [Snowflake Executor] → Reporter
-        └── snowflake_mcp_tool.py # Snowflake MCP tool (used in crew flow only)
+        ├── main.py             # Entry: auth → crew → print result
+        ├── auth.py             # SolidData management key → bearer token
+        ├── config.py           # Settings from .env
+        ├── crew.py             # Crew: SQL Analyst (MCP text2sql) → [Snowflake Executor] → Reporter
+        └── snowflake_connector_tool.py  # Snowflake SQL via connector (username/password; max 1000 rows)
 ```
 
-No file output; no `config/` YAML (agents/tasks are in code).
+No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
 
 
 ---
 
-## Snowflake MCP setup
+## Snowflake setup
 
-If you have your **database**, **schema**, and desired **SQL tool name** but need to create the MCP server and access token in Snowflake, follow these steps. Reference: [Snowflake-managed MCP server](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp) and [Getting Started with Managed Snowflake MCP Server](https://quickstarts.snowflake.com/guide/getting-started-with-snowflake-mcp-server/index.html).
+Snowflake is used only via the **Snowflake Python connector** with **username and password**. No PAT, no Snowflake MCP API, and no network policy or IP whitelisting is required.
 
-### 1. Create the MCP server object (SQL only)
+In `.env` set:
 
-In Snowsight, open a SQL worksheet in the **database and schema** where you want the MCP server. Run (replace placeholders with your values):
+- `SNOWFLAKE_ACCOUNT` — e.g. `xy12345.us-east-1` (see [Account identifiers](https://docs.snowflake.com/en/user-guide/admin-account-identifier))
+- `SNOWFLAKE_USER` — your Snowflake user
+- `SNOWFLAKE_PASSWORD` — your password
+- `SNOWFLAKE_WAREHOUSE` — warehouse to use
+- `SNOWFLAKE_DATABASE` — database to use
+- `SNOWFLAKE_SCHEMA` — schema to use
+- `SNOWFLAKE_ROLE` — (optional) role to use
 
-```sql
-CREATE OR REPLACE MCP SERVER <server_name>
-  FROM SPECIFICATION $$
-tools:
-  - name: "<sql_tool_name>"
-    type: "SYSTEM_EXECUTE_SQL"
-    title: "SQL Execution Tool"
-    description: "A tool to execute SQL queries against the connected Snowflake database."
-$$
-```
-
-- **`<server_name>`** — e.g. `MY_MCP_SERVER`. Use this as `SNOWFLAKE_MCP_SERVER_NAME` in `.env`. Use hyphens in hostnames, not underscores.
-- **`<sql_tool_name>`** — e.g. `sql_exec_tool`. Use this as `SNOWFLAKE_SQL_TOOL_NAME` in `.env`.
-
-Example:
-
-```sql
-CREATE OR REPLACE MCP SERVER MY_MCP_SERVER
-  FROM SPECIFICATION $$
-tools:
-  - name: "sql_exec_tool"
-    type: "SYSTEM_EXECUTE_SQL"
-    title: "SQL Execution Tool"
-    description: "A tool to execute SQL queries against the connected Snowflake database."
-$$
-```
-
-Verify:
-
-```sql
-SHOW MCP SERVERS IN SCHEMA;
-DESCRIBE MCP SERVER <server_name>;
-```
-
-### 2. Grant permissions
-
-The role that will call the MCP server needs:
-
-- **USAGE** on the MCP server (to connect and list tools).
-- **MODIFY** on the MCP server (to use `tools/list` and `tools/call`).
-
-Example (replace role and server name):
-
-```sql
-GRANT USAGE ON MCP SERVER <server_name> TO ROLE <your_role>;
-GRANT MODIFY ON MCP SERVER <server_name> TO ROLE <your_role>;
-```
-
-### 3. Create a Programmatic Access Token (PAT) — simplest for this app
-
-Your app uses **Bearer token** auth. The easiest way is a [Programmatic Access Token (PAT)](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens):
-
-1. In Snowsight: **Governance & security** → **Users & roles** → select your user.
-2. Under **Programmatic access tokens**, click **Generate new token**.
-3. **Name** (e.g. `mcp_poc_token`), optional **Comment**, **Expires in** (e.g. 15 days).
-4. Under scope: choose **One specific role** and select a role that has USAGE/MODIFY on the MCP server (least privilege).
-5. **Generate**, then **copy** the token immediately (it is shown only once).
-6. Put that value in `.env` as `SNOWFLAKE_ACCESS_TOKEN`.
-
-**Note:** By default, PATs require the user to be under a [network policy](https://docs.snowflake.com/en/user-guide/network-policies). If you hit auth errors, your admin may need to attach a network policy that allows your IP, or use an [authentication policy](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens#prerequisites) to relax the requirement.
-
-### 4. (Optional) OAuth instead of PAT
-
-For production, Snowflake recommends OAuth. High-level steps:
-
-1. Create an OAuth security integration (see [CREATE SECURITY INTEGRATION (Snowflake OAuth)](https://docs.snowflake.com/en/sql-reference/sql/create-security-integration-oauth-snowflake)).
-2. Get client id and secret: `SELECT SYSTEM$SHOW_OAUTH_CLIENT_SECRETS('<INTEGRATION_NAME>');`
-3. Implement an OAuth flow in your app to obtain an access token and pass it as `SNOWFLAKE_ACCESS_TOKEN` (Bearer). The MCP server accepts the same Bearer token for OAuth.
-
-### 5. Set your account URL and `.env`
-
-- **Account URL:** `https://<account_locator>.snowflakecomputing.com`  
-  Format depends on your cloud and account; see [Account identifiers](https://docs.snowflake.com/en/user-guide/admin-account-identifier). Example: `https://xy12345.us-east-1.snowflakecomputing.com`.
-- In `.env` set:
-  - `SNOWFLAKE_MCP_SERVER_URL` = that base URL (no path).
-  - `SNOWFLAKE_DATABASE` = database where you created the MCP server.
-  - `SNOWFLAKE_SCHEMA` = schema where you created the MCP server.
-  - `SNOWFLAKE_MCP_SERVER_NAME` = `<server_name>` from step 1.
-  - `SNOWFLAKE_ACCESS_TOKEN` = PAT (or OAuth access token).
-  - `SNOWFLAKE_SQL_TOOL_NAME` = `<sql_tool_name>` from step 1 (e.g. `sql_exec_tool`).
-
-### 6. Test the connection
-
-From a terminal (replace account, database, schema, server name, and token):
-
-```bash
-curl -X POST "https://<account>.snowflakecomputing.com/api/v2/databases/<database>/schemas/<schema>/mcp-servers/<server_name>" \
-  --header 'Content-Type: application/json' \
-  --header "Authorization: Bearer <your_token>" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
-
-You should get a JSON response with a `result.tools` array. If you see your SQL tool, the crew can use it.
-
-**SQL tool argument:** This app calls the SQL tool with `arguments: {"query": "<SQL>"}`. Some Snowflake MCP SQL tools expect `"sql"` instead of `"query"`. If execution fails, check the tool’s `inputSchema` from `tools/list` and use the parameter name it expects (you may need to adjust the executor task in `crew.py` to pass `sql` instead of `query`).
+When all of the required vars are set, the crew runs the generated SQL in Snowflake and the Reporter analyzes the results. If any are missing, the crew skips the Snowflake step and the Reporter only explains what the SQL does. The Snowflake tool returns at most 1000 rows per query (configurable via the tool’s `max_rows` when instantiating it in code).
 
 ---
 
@@ -360,7 +262,10 @@ You should get a JSON response with a `result.tools` array. If you see your SQL 
   Set real `SOLIDDATA_MANAGEMENT_KEY` and `GEMINI_API_KEY` in `.env`.
 
 - **Snowflake step not running**  
-  The Snowflake executor only runs when all of `SNOWFLAKE_MCP_SERVER_URL`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, and `SNOWFLAKE_MCP_SERVER_NAME` are set in `.env`. If any are missing, the crew uses the two-task flow (SQL + report on the query only).
+  Snowflake runs only when all of these are set in `.env`: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`. If any are missing, the crew uses the two-task flow (SQL + report on the query only).
+
+- **"Invalid response from LLM call - None or empty"**  
+  This can occur when the LLM (e.g. Gemini) returns an empty response after a tool run. The crew retries the task automatically. To reduce how often it happens, the Snowflake SQL Executor uses a lower temperature and explicit `max_tokens`; the Snowflake tool also caps results at 1000 rows so context stays manageable. If it persists, check API rate limits and try again.
 
 ---
 

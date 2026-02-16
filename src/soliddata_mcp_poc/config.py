@@ -46,29 +46,29 @@ class Settings(BaseSettings):
         alias="MODEL",
     )
 
-    # ── Snowflake MCP (optional; when set, crew executes SQL and reporter analyzes results) ─
-    snowflake_mcp_server_url: str | None = Field(
+    # ── Snowflake (connector only; username/password) ─────
+    snowflake_account: str | None = Field(
         default=None,
-        description="Snowflake MCP server base URL (e.g. https://your-account.snowflakecomputing.com).",
-        alias="SNOWFLAKE_MCP_SERVER_URL",
+        description="Snowflake account id (e.g. xy12345.us-east-1).",
+        alias="SNOWFLAKE_ACCOUNT",
     )
-    snowflake_database: str | None = Field(default=None, description="Snowflake database name.", alias="SNOWFLAKE_DATABASE")
-    snowflake_schema: str | None = Field(default=None, description="Snowflake schema name.", alias="SNOWFLAKE_SCHEMA")
-    snowflake_mcp_server_name: str | None = Field(
-        default=None,
-        description="Name of the MCP server object in Snowflake.",
-        alias="SNOWFLAKE_MCP_SERVER_NAME",
-    )
-    snowflake_access_token: str | None = Field(
-        default=None,
-        description="OAuth access token for Snowflake MCP.",
-        alias="SNOWFLAKE_ACCESS_TOKEN",
-    )
-    snowflake_sql_tool_name: str = Field(
-        default="sql_exec_tool",
-        description="MCP tool name for SQL execution (e.g. sql_exec_tool).",
-        alias="SNOWFLAKE_SQL_TOOL_NAME",
-    )
+    snowflake_user: str | None = Field(default=None, description="Snowflake user.", alias="SNOWFLAKE_USER")
+    snowflake_password: str | None = Field(default=None, description="Snowflake password.", alias="SNOWFLAKE_PASSWORD")
+    snowflake_database: str | None = Field(default=None, description="Snowflake database.", alias="SNOWFLAKE_DATABASE")
+    snowflake_schema: str | None = Field(default=None, description="Snowflake schema.", alias="SNOWFLAKE_SCHEMA")
+    snowflake_warehouse: str | None = Field(default=None, description="Snowflake warehouse.", alias="SNOWFLAKE_WAREHOUSE")
+    snowflake_role: str | None = Field(default=None, description="Snowflake role (optional).", alias="SNOWFLAKE_ROLE")
+
+    def use_snowflake(self) -> bool:
+        """True when Snowflake connector is fully configured."""
+        return bool(
+            self.snowflake_account
+            and self.snowflake_user
+            and self.snowflake_password
+            and self.snowflake_database
+            and self.snowflake_schema
+            and self.snowflake_warehouse
+        )
 
 
 def get_settings() -> Settings:
