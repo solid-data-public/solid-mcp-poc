@@ -1,13 +1,15 @@
 """
 SolidData MCP text2sql as a CrewAI BaseTool.
 
-Use this tool in CrewAI agents to convert natural-language questions into SQL
-via SolidData's MCP server. No SQL is executed; the tool returns the generated
-query and explanation only.
+The tool accepts only "question" from the agent. semantic_layer_id is read only
+from the SEMANTIC_LAYER_ID environment variable in the tool's environment and
+passed to the MCP server—never from the agent or tool args (avoids the agent
+passing the literal string "SEMANTIC_LAYER_ID"). Set env vars in Crew Studio /
+Enterprise tool config.
 
-Environment variables (set in .env or CrewAI AMP):
+Environment variables (set in .env or CrewAI Enterprise tool config):
   SOLIDDATA_MANAGEMENT_KEY  — SolidData management key (required, MCP-enabled).
-  SEMANTIC_LAYER_ID        — Semantic layer ID for text2sql (required; set in .env).
+  SEMANTIC_LAYER_ID        — Semantic layer ID for text2sql (required).
   AUTH_ENDPOINT            — Optional. Default: production SolidData auth URL.
   MCP_SERVER_URL           — Optional. Default: production SolidData MCP URL.
 """
@@ -73,8 +75,23 @@ def _get_semantic_layer_id() -> str:
     return value
 
 
+def _normalize_question(question: object, kwargs: object) -> str:
+    """Normalize question from _run(question=..., **kwargs). Handles Enterprise passing a single input dict."""
+    if question is not None and isinstance(question, str) and question.strip():
+        return question.strip()
+    if question is not None and isinstance(question, dict):
+        q = question.get("question")
+        if q is not None and str(q).strip():
+            return str(q).strip()
+    if isinstance(kwargs, dict):
+        q = kwargs.get("question")
+        if q is not None and str(q).strip():
+            return str(q).strip()
+    return ""
+
+
 class SolidText2SQLInput(BaseModel):
-    """Input schema for SolidText2SQLTool."""
+    """Input schema: only question. semantic_layer_id is read from env inside the tool and never from the agent."""
 
     question: str = Field(
         ...,
@@ -95,16 +112,80 @@ class SolidText2SQLTool(BaseTool):
     )
     args_schema: Type[BaseModel] = SolidText2SQLInput
 
-    def _run(self, question: str) -> str:
-        """Call Solid MCP text2sql and return the SQL + explanation. Always uses SEMANTIC_LAYER_ID from .env."""
-        layer_id = _get_semantic_layer_id()
+    def _run(self, question: str = "", **kwargs: object) -> str:
+        """Call Solid MCP text2sql. semantic_layer_id is always read from SEMANTIC_LAYER_ID in the tool's environment."""
+        question = _normalize_question(question, kwargs)
+        if not (question and str(question).strip()):
+            return "Error: missing 'question' input. Call this tool with {\"question\": \"your natural-language data question\"}."
+        try:
+            layer_id = _get_semantic_layer_id()
+        except ValueError as e:
+            return f"Error: {e}"
         return asyncio.run(
-            _call_solid_text2sql(question=question, semantic_layer_id=layer_id)
+            _call_solid_text2sql(question=str(question).strip(), semantic_layer_id=layer_id)
         )
 
 
 # Alias for CrewAI scaffold / AMP: Studio may reference the default name from tool create.
 SolidMcpTool = SolidText2SQLTool
+
+
+# Output that indicates MCP/framework returned a key name instead of real content (e.g. in some Enterprise runs)
+_BAD_OUTPUT_QUESTION = frozenset({"question", "'question'", '"question"', "question'"})
+
+def _extract_mcp_tool_text(result: object) -> str:
+    """Extract display text from MCP call_tool result (content array or plain string).
+    Mirrors how CrewAI resolves MCP tool results when using MCPServerHTTP (POC flow)."""
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        out = result.strip()
+        if out.lower() in _BAD_OUTPUT_QUESTION:
+            return (
+                "Error: MCP returned the parameter name instead of the SQL result. "
+                "Ensure SEMANTIC_LAYER_ID and MCP_SERVER_URL are set in this tool's environment (e.g. CrewAI Enterprise tool config) "
+                "and that the SolidData MCP server is reachable."
+            )
+        return out
+    # MCP protocol: result has content: [ { "type": "text", "text": "..." } ]
+    if isinstance(result, list):
+        parts = []
+        for item in result:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if text is not None:
+                    parts.append(str(text).strip())
+            elif hasattr(item, "text"):
+                parts.append(str(getattr(item, "text", "")).strip())
+        if parts:
+            out = "\n".join(parts)
+            if out.strip().lower() in _BAD_OUTPUT_QUESTION:
+                return (
+                    "Error: MCP returned the parameter name instead of the SQL result. "
+                    "Ensure SEMANTIC_LAYER_ID and MCP_SERVER_URL are set in this tool's environment."
+                )
+            return out
+    if isinstance(result, dict):
+        # Prefer standard MCP content array
+        content = result.get("content")
+        if isinstance(content, list):
+            return _extract_mcp_tool_text(content)
+        text = result.get("text")
+        if text is not None:
+            return _extract_mcp_tool_text(text)
+        # Some clients return { "result": { "content": [...] } }
+        inner = result.get("result")
+        if isinstance(inner, dict):
+            return _extract_mcp_tool_text(inner)
+    if hasattr(result, "content"):
+        return _extract_mcp_tool_text(getattr(result, "content"))
+    out = str(result).strip()
+    if out.lower() in _BAD_OUTPUT_QUESTION:
+        return (
+            "Error: MCP returned the parameter name instead of the SQL result. "
+            "Set SEMANTIC_LAYER_ID and MCP_SERVER_URL in this tool's environment (e.g. CrewAI Enterprise tool config)."
+        )
+    return out
 
 
 async def _call_solid_text2sql(question: str, semantic_layer_id: str) -> str:
@@ -126,6 +207,6 @@ async def _call_solid_text2sql(question: str, semantic_layer_id: str) -> str:
                 "semantic_layer_id": semantic_layer_id,
             },
         )
-        return result if isinstance(result, str) else str(result)
+        return _extract_mcp_tool_text(result)
     finally:
         await client.disconnect()
