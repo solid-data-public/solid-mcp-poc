@@ -23,7 +23,9 @@ Use this repo to see the end-to-end flow (auth → MCP → SQL + analysis) and t
   - [1.4 What You See](#14-what-you-see)
 - [Part 2: Solid MCP as a CrewAI Custom Tool](#part-2-solid-mcp-as-a-crewai-custom-tool)
   - [2.1 What's in `solid_mcp_tool/`](#21-whats-in-solid_mcp_tool)
-  - [2.2 Publish the Tool to CrewAI (CLI)](#22-publish-the-tool-to-crewai-cli)
+  - [2.2 How it works (tool flow)](#22-how-it-works-tool-flow)
+  - [2.3 Environment variables (tool)](#23-environment-variables-tool)
+  - [2.4 Publish the Tool to CrewAI (CLI)](#24-publish-the-tool-to-crewai-cli)
 - [Project Structure](#project-structure)
 - [Snowflake setup](#snowflake-setup)
 - [Troubleshooting](#troubleshooting)
@@ -64,7 +66,7 @@ Question (natural language)
    Result printed in terminal only
 ```
 
-- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and uses the **text2sql** tool from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool for use in other crews or AMP; this demo does not use it.
+- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and uses the **text2sql** tool from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool for use in other crews or **CrewAI Enterprise (AMP)**; this demo does not use it directly.
 - **Snowflake** is used only via the **Snowflake Python connector** (`snowflake_connector_tool.py`) with username/password; no Snowflake MCP or PAT. Query results are capped at 1000 rows (configurable on the tool) to keep context manageable.
 
 ---
@@ -126,7 +128,7 @@ cp .env.example .env
 # Edit .env: set SOLIDDATA_MANAGEMENT_KEY and GEMINI_API_KEY (required)
 ```
 
-Optional in `.env`: `MODEL`, `SEMANTIC_LAYER_ID` (defaults in app); `AUTH_ENDPOINT` and `MCP_SERVER_URL` for SolidData **dev** (defaults are production).
+Also set in `.env`: `SEMANTIC_LAYER_ID` (required — UUID from the Solid platform). Optional: `MODEL`, `AUTH_ENDPOINT`, `MCP_SERVER_URL` (for SolidData **dev**; defaults are production).
 
 **Snowflake (optional):** To run the generated SQL in Snowflake and have the Reporter analyze the data, set in `.env`: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, and `SNOWFLAKE_SCHEMA` (and optionally `SNOWFLAKE_ROLE`). The app uses the **Snowflake Python connector** with username/password only—no PAT, no MCP API, no network policy or IP whitelisting. See [Snowflake setup](#snowflake-setup).
 
@@ -163,38 +165,53 @@ soliddata_mcp_poc "How many users signed up last month?"
 
 ## Part 2: Solid MCP as a CrewAI Custom Tool
 
-The **`solid_mcp_tool`** folder contains a single-component CrewAI **custom tool** (no crew/agents): it connects to Solid’s MCP and exposes **text2sql** so any CrewAI agent can use it. You can publish this to the CrewAI Tool Repository and use it in crews/flows or in CrewAI AMP.
+The **`solid_mcp_tool`** folder contains a standalone CrewAI **custom tool** (no crew/agents): it connects to Solid’s MCP and exposes **text2sql** so any CrewAI agent can use it. You can publish this to the CrewAI Tool Repository and use it in crews/flows or in **CrewAI Enterprise (AMP / Crew Studio)**.
 
 ### 2.1 What’s in `solid_mcp_tool/`
 
-- **`tool.py`** — One file: SolidData auth + MCP call. This is the code you paste into a `crewai tool create` project.
-- **`README.md`** — Short usage and env vars.
+- **`tool.py`** — Self-contained: auth + MCP call. Declares `env_vars` via `EnvVar` so CrewAI Enterprise (AMP) injects required secrets (`SOLIDDATA_MANAGEMENT_KEY`, `SEMANTIC_LAYER_ID`) at runtime.
+- **`README.md`** — Usage, env vars, publish instructions, and AMP deployment notes.
 
-This is the **standard CrewAI Enterprise custom tool** pattern (one tool, no crew flow).
+### 2.2 How it works (tool flow)
 
-### 2.2 Publish the Tool to CrewAI (CLI)
+1. Agent sends `{question}` to the tool.
+2. Tool reads `SEMANTIC_LAYER_ID` from environment (injected by AMP via `env_vars` or from `.env` locally).
+3. Tool authenticates with SolidData using `SOLIDDATA_MANAGEMENT_KEY`.
+4. Tool calls MCP `text2sql` with `{"question": ..., "semantic_layer_id": ...}`.
+5. Returns the generated SQL and explanation.
 
-Do these steps in a **normal terminal** (not the IDE), in a new directory (e.g. your home or a tools folder).
+### 2.3 Environment variables (tool)
+
+| Variable | Required | Description |
+|---|---|---|
+| `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access. |
+| `SEMANTIC_LAYER_ID` | Yes | UUID of the semantic layer (passed as MCP argument). |
+| `AUTH_ENDPOINT` | No | Override auth URL. Default: production. |
+| `MCP_SERVER_URL` | No | Override MCP URL. Default: production. |
+
+In **CrewAI Enterprise**, set these in the **tool configuration** in Crew Studio. The tool class declares them via `env_vars` so AMP injects them into `os.environ` before `_run` executes.
+
+### 2.4 Publish the Tool to CrewAI (CLI)
+
+Do these steps in a **normal terminal**, in a new directory.
 
 1. **Log in to CrewAI**
    ```bash
    crewai login
    ```
-   Complete the browser device confirmation.
 
 2. **Create the tool project**
    ```bash
    crewai tool create solid_mcp_tool
    ```
-   This creates a new folder (e.g. `solid_mcp_tool/`) with a scaffolded `tool.py` and `pyproject.toml`.
 
 3. **Replace the scaffold `tool.py`**  
-   Copy the **entire contents** of this repo’s **`solid_mcp_tool/tool.py`** into the new project’s `tool.py` (overwrite the scaffold).
+   Copy the entire contents of this repo's `solid_mcp_tool/tool.py` into the new project's `tool.py`.
 
 4. **Update `pyproject.toml`**
-   - Set `name`, `version`, and `description` as you want.
-   - **Increment the `version`** for every publish (e.g. `0.1.0` → `0.1.1`).
-   - Ensure dependencies include at least `crewai` and `httpx` (add `httpx` if the scaffold doesn’t list it).
+   - Set `name`, `version`, `description`.
+   - **Increment `version`** for every publish.
+   - Ensure dependencies include: `crewai`, `httpx`, `pydantic`, `nest-asyncio`.
 
 5. **Commit and publish**
    ```bash
@@ -202,9 +219,9 @@ Do these steps in a **normal terminal** (not the IDE), in a new directory (e.g. 
    git commit -m "Solid MCP text2sql tool"
    crewai tool publish
    ```
-   Use `crewai tool publish --public` to publish as a public tool.
+   Use `crewai tool publish --public` for a public tool.
 
-After publishing, other projects can install it with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` in that project or in CrewAI AMP; optionally set `AUTH_ENDPOINT`, `MCP_SERVER_URL`, and `SEMANTIC_LAYER_ID` for the tool.
+After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID` in the project or in CrewAI AMP tool config.
 
 ---
 
@@ -218,7 +235,7 @@ solid-mcp-poc/                  # Repo root
 ├── uv.lock
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
-│   ├── tool.py                 # Copy this into crewai tool create project
+│   ├── tool.py                 # Self-contained: auth + MCP call + env_vars for AMP injection
 │   └── README.md
 └── src/
     └── soliddata_mcp_poc/      # Demo app: auth → MCP crew → terminal output
@@ -259,7 +276,13 @@ When all of the required vars are set, the crew runs the generated SQL in Snowfl
   Use the same environment for auth and MCP: both production or both dev. Confirm your management key has MCP access with SolidData.
 
 - **Missing or placeholder key**  
-  Set real `SOLIDDATA_MANAGEMENT_KEY` and `GEMINI_API_KEY` in `.env`.
+  Set real `SOLIDDATA_MANAGEMENT_KEY`, `GEMINI_API_KEY`, and `SEMANTIC_LAYER_ID` in `.env`.
+
+- **Tool returns `'question'` or empty result in AMP**  
+  The tool's `env_vars` must be configured in **CrewAI Enterprise tool config** so AMP injects `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID` into `os.environ`. Without this, the tool can't authenticate or pass the semantic layer ID. After changing tool config, **republish** the tool so AMP picks up the latest version.
+
+- **`ImportError: cannot import name 'SolidMcpTool'`**  
+  The deployed package on AMP is stale. Republish the tool with an incremented version.
 
 - **Snowflake step not running**  
   Snowflake runs only when all of these are set in `.env`: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`. If any are missing, the crew uses the two-task flow (SQL + report on the query only).

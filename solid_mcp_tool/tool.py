@@ -8,7 +8,7 @@ SolidData MCP text2sql — CrewAI BaseTool.
 
 import asyncio
 import os
-from typing import Any, Optional, Type
+from typing import Any, Type
 
 try:
     import nest_asyncio
@@ -28,7 +28,6 @@ DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
 
 class SolidText2SQLInput(BaseModel):
     question: str = Field(..., description="Natural-language data question to convert into SQL.")
-    semantic_layer_id: Optional[str] = Field(default=None, description="Override SEMANTIC_LAYER_ID env var.")
 
 
 class SolidText2SQLTool(BaseTool):
@@ -45,10 +44,10 @@ class SolidText2SQLTool(BaseTool):
         ]
     )
 
-    def _run(self, question: str, semantic_layer_id: Optional[str] = None, **kwargs: Any) -> str:
+    def _run(self, question: str, **kwargs: Any) -> str:
         if nest_asyncio:
             nest_asyncio.apply()
-        sl_id = (semantic_layer_id or "").strip() or os.environ.get("SEMANTIC_LAYER_ID", "").strip()
+        sl_id = os.environ.get("SEMANTIC_LAYER_ID", "").strip()
         return asyncio.run(self._call_mcp(question.strip(), sl_id))
 
     async def _call_mcp(self, question: str, semantic_layer_id: str) -> str:
