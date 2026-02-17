@@ -80,10 +80,6 @@ class SolidText2SQLInput(BaseModel):
         ...,
         description="Natural-language question to convert into a SQL query (e.g. 'How many users signed up last month?').",
     )
-    semantic_layer_id: str = Field(
-        default_factory=_get_semantic_layer_id,
-        description="Semantic layer ID for the SolidData MCP server (defaults to SEMANTIC_LAYER_ID from .env).",
-    )
 
 
 class SolidText2SQLTool(BaseTool):
@@ -99,13 +95,9 @@ class SolidText2SQLTool(BaseTool):
     )
     args_schema: Type[BaseModel] = SolidText2SQLInput
 
-    def _run(
-        self,
-        question: str,
-        semantic_layer_id: str | None = None,
-    ) -> str:
-        """Call Solid MCP text2sql and return the SQL + explanation."""
-        layer_id = (semantic_layer_id or "").strip() or _get_semantic_layer_id()
+    def _run(self, question: str) -> str:
+        """Call Solid MCP text2sql and return the SQL + explanation. Always uses SEMANTIC_LAYER_ID from .env."""
+        layer_id = _get_semantic_layer_id()
         return asyncio.run(
             _call_solid_text2sql(question=question, semantic_layer_id=layer_id)
         )
