@@ -103,6 +103,10 @@ class SolidText2SQLTool(BaseTool):
         )
 
 
+# Alias for CrewAI scaffold / AMP: Studio may reference the default name from tool create.
+SolidMcpTool = SolidText2SQLTool
+
+
 async def _call_solid_text2sql(
     question: str,
     semantic_layer_id: str = "851b4156-e0ea-460b-b6f9-cf3f428e95b5",
