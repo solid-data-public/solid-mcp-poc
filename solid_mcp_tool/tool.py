@@ -2,13 +2,18 @@
 SolidData MCP text2sql — CrewAI BaseTool.
 
 1. Receive {question} from the CrewAI agent.
-2. Read SEMANTIC_LAYER_ID from the environment (injected by AMP via env_vars).
+2. Read SEMANTIC_LAYER_ID from env (injected by AMP via env_vars).
 3. Call Solid MCP text2sql with both arguments.
 """
 
 import asyncio
 import os
-from typing import Type
+from typing import Any, Optional, Type
+
+try:
+    import nest_asyncio
+except ImportError:
+    nest_asyncio = None
 
 import httpx
 from crewai.mcp import MCPClient
@@ -21,63 +26,14 @@ DEFAULT_AUTH_ENDPOINT = "https://backend.production.soliddata.io/api/v1/auth/exc
 DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
 
 
-def _get_mcp_token() -> str:
-    """Exchange SOLIDDATA_MANAGEMENT_KEY for a bearer token."""
-    key = os.environ.get("SOLIDDATA_MANAGEMENT_KEY", "").strip()
-    if not key:
-        raise ValueError("SOLIDDATA_MANAGEMENT_KEY is not set.")
-    auth_url = os.environ.get("AUTH_ENDPOINT", DEFAULT_AUTH_ENDPOINT)
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.post(auth_url, json={"management_key": key}, headers={"Content-Type": "application/json"})
-        resp.raise_for_status()
-    data = resp.json()
-    if isinstance(data, str):
-        token = data.strip()
-    elif isinstance(data, dict):
-        token = data.get("token") or data.get("access_token") or data.get("accessToken")
-        if not token:
-            raise ValueError("Auth response missing token field.")
-    else:
-        raise ValueError(f"Unexpected auth response: {type(data)}")
-    if token.lower().startswith("bearer "):
-        token = token[7:]
-    return token.strip()
-
-
-def _extract_text(result: object) -> str:
-    """Pull plain text out of an MCP tool result."""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, list):
-        parts = []
-        for item in result:
-            if isinstance(item, dict) and "text" in item:
-                parts.append(str(item["text"]))
-            elif hasattr(item, "text"):
-                parts.append(str(item.text))
-        return "\n".join(parts) if parts else str(result)
-    if isinstance(result, dict):
-        if "content" in result:
-            return _extract_text(result["content"])
-        if "text" in result:
-            return str(result["text"])
-    if hasattr(result, "content"):
-        return _extract_text(result.content)
-    return str(result)
-
-
 class SolidText2SQLInput(BaseModel):
     question: str = Field(..., description="Natural-language data question to convert into SQL.")
+    semantic_layer_id: Optional[str] = Field(default=None, description="Override SEMANTIC_LAYER_ID env var.")
 
 
 class SolidText2SQLTool(BaseTool):
-    """Convert a natural-language question into SQL via SolidData MCP text2sql."""
-
     name: str = "solid_text2sql"
-    description: str = (
-        "Convert a natural-language data question into a SQL query using SolidData's semantic layer. "
-        "Returns the SQL and an explanation; does not run the query."
-    )
+    description: str = "Convert a natural-language data question into SQL using SolidData's semantic layer."
     args_schema: Type[BaseModel] = SolidText2SQLInput
 
     env_vars: list[EnvVar] = Field(
@@ -89,60 +45,37 @@ class SolidText2SQLTool(BaseTool):
         ]
     )
 
-    def _run(self, question: str) -> str:
-        semantic_layer_id = os.environ.get("SEMANTIC_LAYER_ID", "").strip()
-        if not semantic_layer_id:
-            return "Error: SEMANTIC_LAYER_ID not set. Configure it in CrewAI tool env vars."
-
-        management_key = os.environ.get("SOLIDDATA_MANAGEMENT_KEY", "").strip()
-        if not management_key:
-            return "Error: SOLIDDATA_MANAGEMENT_KEY not set."
-
-        if not question.strip():
-            return "Error: Question cannot be empty."
-
-        try:
-            return asyncio.run(self._call_mcp(question.strip(), semantic_layer_id))
-        except Exception as e:
-            return f"Error calling MCP server: {str(e)}"
+    def _run(self, question: str, semantic_layer_id: Optional[str] = None, **kwargs: Any) -> str:
+        if nest_asyncio:
+            nest_asyncio.apply()
+        sl_id = (semantic_layer_id or "").strip() or os.environ.get("SEMANTIC_LAYER_ID", "").strip()
+        return asyncio.run(self._call_mcp(question.strip(), sl_id))
 
     async def _call_mcp(self, question: str, semantic_layer_id: str) -> str:
-        try:
-            token = _get_mcp_token()
-        except Exception as e:
-            return f"Authentication failed: {str(e)}"
+        key = os.environ.get("SOLIDDATA_MANAGEMENT_KEY", "").strip()
+        auth_url = os.environ.get("AUTH_ENDPOINT", DEFAULT_AUTH_ENDPOINT)
+        with httpx.Client(timeout=30.0) as http:
+            resp = http.post(auth_url, json={"management_key": key}, headers={"Content-Type": "application/json"})
+            resp.raise_for_status()
+        data = resp.json()
+        token = data if isinstance(data, str) else data.get("token") or data.get("access_token")
+        token = token.strip().removeprefix("Bearer ").removeprefix("bearer ").strip()
 
         mcp_url = os.environ.get("MCP_SERVER_URL", DEFAULT_MCP_SERVER_URL)
         transport = HTTPTransport(url=mcp_url, headers={"Authorization": f"Bearer {token}"}, streamable=True)
-        client = MCPClient(transport)
-
-        try:
+        async with MCPClient(transport) as client:
             await client.connect()
-
-            print(f"Calling text2sql with question: '{question}' and semantic_layer_id: '{semantic_layer_id}'")
-
             result = await client.call_tool(
                 "text2sql",
                 arguments={"question": question, "semantic_layer_id": semantic_layer_id},
             )
-
-            print(f"MCP result: {result}")
-
-            extracted_text = _extract_text(result)
-            print(f"Extracted text: {extracted_text}")
-
-            if not extracted_text or extracted_text.strip().lower() in ["question", "null", ""]:
-                return f"Error: MCP server returned unexpected result: {extracted_text}"
-
-            return extracted_text
-
-        except Exception as e:
-            return f"MCP call failed: {str(e)}"
-        finally:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
+        if isinstance(result, str):
+            return result
+        if hasattr(result, "content") and isinstance(result.content, list):
+            return "\n".join(getattr(c, "text", str(c)) for c in result.content)
+        if isinstance(result, list):
+            return "\n".join(str(i.get("text", "")) if isinstance(i, dict) else str(i) for i in result)
+        return str(result)
 
 
 SolidMcpTool = SolidText2SQLTool
