@@ -131,7 +131,7 @@ class SolidMcpTool(BaseTool):
                 await client.connect()
                 result = await client.call_tool(
                     "text2sql",
-                    arguments={"question": q, "semantic_layer_ids": layer_id},
+                    arguments={"question": q, "semantic_layer_ids": [layer_id]},
                 )
                 return result
 
