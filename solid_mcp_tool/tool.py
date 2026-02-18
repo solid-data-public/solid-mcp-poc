@@ -35,7 +35,9 @@ class SolidText2SQLInput(BaseModel):
     )
 
 
-class SolidText2SQLTool(BaseTool):
+class SolidMcpTool(BaseTool):
+    """CrewAI tool that calls SolidData MCP text2sql. Use this name for CrewAI Studio/Enterprise imports."""
+
     name: str = "solid_text2sql"
     description: str = (
         "Convert a natural-language data question into a SQL query using SolidData's semantic layer. "
@@ -105,5 +107,5 @@ class SolidText2SQLTool(BaseTool):
             return f"Error executing Solid MCP Tool: {str(e)}"
 
 
-# Alias for CrewAI Enterprise / studio imports that expect this name
-SolidMcpTool = SolidText2SQLTool
+# Alias for code that imports the descriptive name
+SolidText2SQLTool = SolidMcpTool
