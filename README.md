@@ -233,6 +233,9 @@ solid-mcp-poc/                  # Repo root
 ├── pyproject.toml
 ├── README.md
 ├── uv.lock
+├── openapi.yaml                # OpenAPI 3.0 (auth + text2sql); text2sql targets Azure bridge or Solid
+├── scripts/e2e_openapi_test.py # E2E test for OpenAPI contract; use TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for bridge
+├── solid-mcp-bridge/           # Azure Function App: REST-to-MCP bridge (see solid-mcp-bridge/README.md)
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
 │   ├── tool.py                 # Self-contained: auth + MCP call + env_vars for AMP injection
@@ -248,6 +251,8 @@ solid-mcp-poc/                  # Repo root
 ```
 
 No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
+
+**REST bridge (Workato, Copilot Studio, other agents):** The **solid-mcp-bridge/** directory is an Azure Function App that exposes Solid's MCP text2sql as a REST endpoint. Use it when the consumer only supports HTTP/OpenAPI (e.g. Workato custom connector, Copilot Studio HTTP action). The deployed URL and usage are documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root **openapi.yaml** lists the bridge as the recommended server for the text2sql operation.
 
 
 ---

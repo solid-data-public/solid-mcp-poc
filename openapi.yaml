@@ -74,8 +74,10 @@ paths:
 
   /text2sql:
     servers:
+      - url: https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp
+        description: Azure REST-to-MCP bridge (recommended). Full URL for this operation is .../api/mcp/text2sql. Append ?code=<function-key> when using function-level auth.
       - url: https://mcp.production.soliddata.io/mcp
-        description: Solid MCP server (base for text2sql)
+        description: Solid MCP server (direct; no REST facade—use bridge above for REST clients)
     post:
       tags:
         - MCP
