@@ -1,0 +1,217 @@
+openapi: 3.0.3
+info:
+  title: Solid MCP API
+  description: |
+    API for Solid's MCP text2sql tool. Converts a natural-language question and
+    semantic layer ID(s) into a SQL query and explanation via Solid's MCP server.
+
+    **Workato integration**
+    - The connection must provide the **management key** (fixed value, e.g. from
+      environment or Workato connection field).
+    - Every time the MCP is called, the recipe must first call the **auth exchange**
+      operation (exchangeManagementKeyForToken) with that management key, then call
+      the **MCP operation** (text2sql) with the returned token in the Authorization
+      header as "Bearer {mcp_token}".
+
+    **Testing (e.g. apinotes.io)**
+    - When the tester applies Bearer auth automatically, supply only the raw token
+      in the auth field and leave the manual Authorization header empty (or vice
+      versa) to avoid "Bearer Bearer &lt;token&gt;".
+  version: 1.0.0
+  contact:
+    name: Solid
+
+servers:
+  - url: https://mcp.production.soliddata.io/mcp
+    description: Solid MCP server (primary for text2sql; use this base for POST /text2sql)
+  - url: https://backend.production.soliddata.io
+    description: Solid auth server (use for auth exchange only; single-server tools must use this for the auth operation)
+
+tags:
+  - name: Auth
+    description: Exchange management key for JWT bearer token
+  - name: MCP
+    description: Solid MCP text2sql
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/v1/auth/exchange_user_access_key:
+    servers:
+      - url: https://backend.production.soliddata.io
+        description: Solid auth server
+    post:
+      tags:
+        - Auth
+      summary: Exchange management key for JWT token
+      description: |
+        POST the management key to obtain a JWT bearer token. Call this operation
+        first in every recipe run; then pass the returned token (token or access_token
+        field) as the Authorization header for the text2sql operation, in the form
+        "Bearer {mcp_token}".
+      operationId: exchangeManagementKeyForToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthExchangeRequest'
+      responses:
+        '200':
+          description: Success. Returns a JWT token for use as Bearer on MCP calls.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthExchangeResponse'
+        '401':
+          description: Invalid or expired management key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /text2sql:
+    servers:
+      - url: https://mcp.production.soliddata.io/mcp
+        description: Solid MCP server (base for text2sql)
+    post:
+      tags:
+        - MCP
+      summary: Convert natural language to SQL
+      description: |
+        Sends the question and semantic layer ID(s) to Solid's MCP text2sql tool.
+        Returns the generated SQL and explanation in the message field.
+        Requires the Authorization header with the token from the auth exchange
+        operation (e.g. "Bearer {mcp_token}"). In Workato, map the output of the
+        auth step into this header (e.g. "Bearer " & step_1.body.token).
+        When using a tester that applies Bearer auth automatically, fill either
+        the security/auth field or this header with the token, not both, to avoid
+        "Bearer Bearer &lt;token&gt;".
+      operationId: text2sql
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "Bearer <token from auth exchange>"
+          description: Bearer token from the exchangeManagementKeyForToken operation. Use "Bearer " & token from previous step.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Text2SqlRequest'
+            examples:
+              singleLayer:
+                summary: Single semantic layer
+                value:
+                  question: "How many orders were placed last month?"
+                  semantic_layer_ids: ["00000000-0000-0000-0000-000000000000"]
+              multipleLayers:
+                summary: Multiple semantic layers
+                value:
+                  question: "What is total revenue by region?"
+                  semantic_layer_ids:
+                    - "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                    - "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+      responses:
+        '200':
+          description: Success. Returns the MCP text2sql result (SQL and explanation).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Text2SqlResponse'
+        '400':
+          description: Bad request (missing or invalid body).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Authorization header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed. Use POST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: MCP call failed (e.g. Solid server error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token from the exchangeManagementKeyForToken operation. Send as "Bearer {mcp_token}" on every MCP call.
+
+  schemas:
+    AuthExchangeRequest:
+      type: object
+      required:
+        - management_key
+      properties:
+        management_key:
+          type: string
+          description: Solid management key (from connection or environment).
+          example: "<your-management-key>"
+
+    AuthExchangeResponse:
+      type: object
+      description: Response may include token and/or access_token; use whichever is present for the next step's Bearer header.
+      properties:
+        token:
+          type: string
+          description: JWT bearer token for MCP calls.
+        access_token:
+          type: string
+          description: Alternative field name for JWT bearer token (use token or access_token, whichever is returned).
+
+    Text2SqlRequest:
+      type: object
+      required:
+        - question
+        - semantic_layer_ids
+      properties:
+        question:
+          type: string
+          description: Natural-language question to convert into a SQL query.
+          example: "How many users signed up last month?"
+        semantic_layer_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: UUID(s) of the Solid semantic layer. Must be a non-empty array.
+          minItems: 1
+          example: ["00000000-0000-0000-0000-000000000000"]
+
+    Text2SqlResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Result from Solid MCP text2sql (generated SQL and explanation, often including markdown code blocks).
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
