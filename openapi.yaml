@@ -75,7 +75,7 @@ paths:
   /text2sql:
     servers:
       - url: https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp
-        description: Azure REST-to-MCP bridge (recommended). Full URL for this operation is .../api/mcp/text2sql. Append ?code=<function-key> when using function-level auth.
+        description: Azure REST-to-MCP bridge (recommended). Full URL for this operation is .../api/mcp/text2sql. The function key is included as the default for the 'code' query parameter.
       - url: https://mcp.production.soliddata.io/mcp
         description: Solid MCP server (direct; no REST facade—use bridge above for REST clients)
     post:
@@ -100,6 +100,13 @@ paths:
             type: string
             example: "Bearer <token from auth exchange>"
           description: Bearer token from the exchangeManagementKeyForToken operation. Use "Bearer " & token from previous step.
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+          description: Azure Function key when using the bridge server (function-level auth). Omit when calling the direct Solid MCP server.
       requestBody:
         required: true
         content:
