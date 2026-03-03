@@ -26,6 +26,7 @@ Use this repo to see the end-to-end flow (auth → MCP → SQL + analysis) and t
   - [2.2 How it works (tool flow)](#22-how-it-works-tool-flow)
   - [2.3 Environment variables (tool)](#23-environment-variables-tool)
   - [2.4 Publish the Tool to CrewAI (CLI)](#24-publish-the-tool-to-crewai-cli)
+- [Using the OpenAPI spec (Workato, Power Platform, etc.)](#using-the-openapi-spec-workato-power-platform-etc)
 - [Project Structure](#project-structure)
 - [Snowflake setup](#snowflake-setup)
 - [Troubleshooting](#troubleshooting)
@@ -225,6 +226,38 @@ After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA
 
 ---
 
+## Using the OpenAPI spec (Workato, Power Platform, etc.)
+
+If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI spec** (no native MCP or Python SDK), use the root **`openapi.yaml`** to connect to Solid’s MCP text2sql via the **Azure REST-to-MCP bridge**. This applies to:
+
+- **Workato** (custom connector)
+- **Microsoft Power Platform / Copilot Studio** (custom connector or HTTP action)
+- **Logic Apps**, **n8n**, or other automation tools that consume OpenAPI
+- **API testers** (e.g. apinotes.io, Postman) to validate the contract
+
+### What’s in the spec
+
+- **Auth:** `POST /api/v1/auth/exchange_user_access_key` — exchange a Solid **management key** for a JWT bearer token (host: Solid auth server).
+- **text2sql:** `POST /text2sql` — send a natural-language question and semantic layer ID(s); get back generated SQL and explanation (host: **Azure bridge** by default; the bridge function key is included in the spec as the default for the `code` query parameter, so you do **not** need to set `BRIDGE_FUNCTION_KEY` in env for connector setups).
+
+### Flow for each request
+
+1. **Auth** — Call `exchangeManagementKeyForToken` with `{"management_key": "<your-management-key>"}`. Use the returned `token` or `access_token` for the next step.
+2. **text2sql** — Call the text2sql operation with:
+   - **Authorization:** `Bearer <token from step 1>`
+   - **Body:** `{"question": "...", "semantic_layer_ids": ["<uuid>", ...]}`
+   - When using the **bridge server** (recommended in the spec), the `code` query parameter is already set in the spec; no extra env or config needed for the function key.
+
+### How to use it
+
+- **Workato:** Create a custom connector and import the OpenAPI spec (paste the contents of `openapi.yaml` or point to its URL). Configure the connection with your Solid **management key**. In the recipe, call the auth operation first, then pass the token into the text2sql step’s Authorization header (e.g. `"Bearer " & step_1.body.token`).
+- **Power Platform / Copilot Studio:** Import the spec as a custom connector or use an HTTP action; set the request URL to the bridge’s text2sql endpoint (the spec’s default server already includes the bridge URL and function key). Use a flow variable for the management key and call auth once per run, then pass the token to the text2sql request.
+- **API testers:** Import `openapi.yaml`. For Bearer auth, use the raw token (no extra “Bearer ” prefix if the tool adds it automatically). Run auth, then text2sql with the returned token.
+
+The **Azure bridge** that exposes MCP as REST is deployed and documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root `openapi.yaml` is the single source of truth for the **bridge URL and function key** when using REST/OpenAPI clients.
+
+---
+
 ## Project Structure
 
 ```
@@ -233,8 +266,8 @@ solid-mcp-poc/                  # Repo root
 ├── pyproject.toml
 ├── README.md
 ├── uv.lock
-├── openapi.yaml                # OpenAPI 3.0 (auth + text2sql); text2sql targets Azure bridge or Solid
-├── scripts/e2e_openapi_test.py # E2E test for OpenAPI contract; use TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for bridge
+├── openapi.yaml                # OpenAPI 3.0 (auth + text2sql); bridge URL + function key in spec—see "Using the OpenAPI spec" above
+├── scripts/e2e_openapi_test.py # E2E test for OpenAPI contract; use TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for local/CI
 ├── solid-mcp-bridge/           # Azure Function App: REST-to-MCP bridge (see solid-mcp-bridge/README.md)
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
@@ -252,7 +285,7 @@ solid-mcp-poc/                  # Repo root
 
 No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
 
-**REST bridge (Workato, Copilot Studio, other agents):** The **solid-mcp-bridge/** directory is an Azure Function App that exposes Solid's MCP text2sql as a REST endpoint. Use it when the consumer only supports HTTP/OpenAPI (e.g. Workato custom connector, Copilot Studio HTTP action). The deployed URL and usage are documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root **openapi.yaml** lists the bridge as the recommended server for the text2sql operation.
+**REST bridge (Workato, Copilot Studio, other agents):** The **solid-mcp-bridge/** directory is an Azure Function App that exposes Solid's MCP text2sql as a REST endpoint. Use it when the consumer only supports HTTP/OpenAPI (e.g. Workato custom connector, Copilot Studio HTTP action). The deployed URL and usage are documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root **openapi.yaml** lists the bridge as the recommended server for the text2sql operation and includes the bridge function key in the spec (no env var needed for connector setups). See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc) for step-by-step usage.
 
 
 ---
