@@ -12,6 +12,10 @@ Usage:
   # From .env (script loads .env from repo root when python-dotenv is available):
   python scripts/e2e_openapi_test.py
 
+  # Interactive: after auth, you are prompted for question and semantic_layer_ids (comma-separated UUIDs).
+  # Press Enter to use defaults: question = "How much revenue was generated in 2024 by product category?"
+  # and semantic_layer_ids = [SEMANTIC_LAYER_ID] or the built-in default.
+
   # Or export:
   export SOLIDDATA_MANAGEMENT_KEY=<your-key>
   export SEMANTIC_LAYER_ID=<uuid>   # optional; defaults below
@@ -63,8 +67,8 @@ def main() -> int:
         print("Error: Set SOLIDDATA_MANAGEMENT_KEY in the environment (see .env.example).", file=sys.stderr)
         return 1
 
-    layer_id = (os.environ.get("SEMANTIC_LAYER_ID") or DEFAULT_SEMANTIC_LAYER_ID).strip()
-    question = "How much revenue was generated in 2024 by product category?"
+    default_layer_id = (os.environ.get("SEMANTIC_LAYER_ID") or DEFAULT_SEMANTIC_LAYER_ID).strip()
+    default_question = "How much revenue was generated in 2024 by product category?"
 
     with httpx.Client(timeout=TIMEOUT) as client:
         # 1. Auth exchange (as per OpenAPI: POST auth URL with management_key)
@@ -91,7 +95,22 @@ def main() -> int:
         if token.lower().startswith("bearer "):
             token = token[7:].strip()
 
-        # 2. text2sql (as per OpenAPI: POST text2sql URL with Bearer + JSON body)
+        # 2. Prompt for question and semantic_layer_ids (Enter = use defaults)
+        try:
+            q_in = input(f"Question [{default_question}]: ").strip()
+            question = q_in if q_in else default_question
+            ids_in = input(f"Semantic layer ID(s), comma-separated [{default_layer_id}]: ").strip()
+            if ids_in:
+                semantic_layer_ids = [x.strip() for x in ids_in.split(",") if x.strip()]
+            else:
+                semantic_layer_ids = [default_layer_id]
+        except EOFError:
+            question = default_question
+            semantic_layer_ids = [default_layer_id]
+
+        print(f"Calling text2sql: question={question!r}, semantic_layer_ids={semantic_layer_ids}")
+
+        # 3. text2sql (as per OpenAPI: POST text2sql URL with Bearer + JSON body)
         # Retry on 503 or ReadTimeout (Flex Consumption can recycle instances mid-request)
         url = TEXT2SQL_URL
         if BRIDGE_FUNCTION_KEY:
@@ -100,7 +119,7 @@ def main() -> int:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
         }
-        payload = {"question": question, "semantic_layer_ids": [layer_id]}
+        payload = {"question": question, "semantic_layer_ids": semantic_layer_ids}
         resp = None
         for attempt in range(E2E_RETRY_ATTEMPTS):
             try:
@@ -149,6 +168,7 @@ def main() -> int:
             return 1
 
     print("OK: Auth and text2sql (REST) succeeded; OpenAPI contract validated.")
+    print("Response message:", body.get("message", ""))
     return 0
 
 
