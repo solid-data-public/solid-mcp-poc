@@ -1,19 +1,17 @@
-import asyncio
 import os
 from typing import Type, Optional, Any
 
-try:
-    import nest_asyncio
-except ImportError:
-    nest_asyncio = None
-
 import httpx
-from crewai.mcp import MCPClient
-from crewai.mcp.transports.http import HTTPTransport
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# Same defaults as soliddata_mcp_poc.config.Settings (crew flow)
+# Bridge: one-shot URL includes path and function key (text2sql before ?code=)
+BRIDGE_BASE = "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp"
+# code query param default from openapi.yaml (Azure Function key)
+BRIDGE_FUNCTION_KEY_DEFAULT = "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+TEXT2SQL_URL = f"{BRIDGE_BASE}/text2sql?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
+
+# Legacy (direct MCP / auth exchange)
 _DEFAULT_AUTH_ENDPOINT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
 _DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
 
@@ -93,8 +91,7 @@ class SolidMcpTool(BaseTool):
     env_vars: dict = {
         "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
         "SEMANTIC_LAYER_ID": "Optional. Fallback for semantic_layer_id if not passed.",
-        "AUTH_ENDPOINT": "Optional. Defaults to production.",
-        "MCP_SERVER_URL": "Optional. Defaults to production.",
+        "TEXT2SQL_URL": "Optional. Bridge URL with path and code (default uses BRIDGE_BASE/text2sql?code=...).",
     }
 
     def _run(
@@ -103,9 +100,6 @@ class SolidMcpTool(BaseTool):
         semantic_layer_id: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
-        if nest_asyncio:
-            nest_asyncio.apply()
-
         q = (question or "").strip() or (kwargs.get("question") and str(kwargs["question"]).strip()) or ""
         if not q:
             return "Error: Input 'question' is missing."
@@ -118,26 +112,46 @@ class SolidMcpTool(BaseTool):
         if not layer_id:
             return "Error: semantic_layer_id is missing. Pass it as an argument or set SEMANTIC_LAYER_ID."
 
+        management_key = (
+            (os.environ.get("SOLIDDATA_MANAGEMENT_KEY") or "").strip()
+        )
+        if not management_key:
+            return (
+                "Error: SOLIDDATA_MANAGEMENT_KEY is missing. "
+                "Set it in your environment or .env."
+            )
+        if "your_management_key" in management_key.lower() or "here" in management_key.lower():
+            return (
+                "Error: SOLIDDATA_MANAGEMENT_KEY looks like a placeholder. "
+                "Replace it with your real Solid management key."
+            )
+
+        url = os.environ.get("TEXT2SQL_URL", TEXT2SQL_URL)
+        payload = {
+            "management_key": management_key,
+            "question": q,
+            "semantic_layer_ids": [layer_id],
+        }
+
         try:
-            token = _get_mcp_token()
-        except ValueError as e:
-            return str(e)
-
-        mcp_url = os.environ.get("MCP_SERVER_URL", _DEFAULT_MCP_SERVER_URL)
-
-        async def make_call():
-            transport = HTTPTransport(url=mcp_url, headers={"Authorization": f"Bearer {token}"})
-            async with MCPClient(transport) as client:
-                await client.connect()
-                result = await client.call_tool(
-                    "text2sql",
-                    arguments={"question": q, "semantic_layer_ids": [layer_id]},
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(
+                    url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
                 )
-                return result
-
-        try:
-            raw = asyncio.run(make_call())
-            return raw if isinstance(raw, str) else str(raw)
+            if resp.status_code == 401:
+                return (
+                    "Error: Solid returned 401. Check that SOLIDDATA_MANAGEMENT_KEY "
+                    "is correct and not expired."
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "message" in data:
+                return data["message"]
+            return str(data) if data else "Error: Empty response from bridge."
+        except httpx.HTTPStatusError as e:
+            return f"Error from bridge: {e.response.status_code} {e.response.text}"
         except Exception as e:
             return f"Error executing Solid MCP Tool: {str(e)}"
 
