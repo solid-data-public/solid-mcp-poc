@@ -5,15 +5,11 @@ import httpx
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# Bridge: one-shot URL includes path and function key (text2sql before ?code=)
+# From openapi.yaml: auth (request 1) then bridge text2sql (request 2)
+AUTH_ENDPOINT_DEFAULT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
 BRIDGE_BASE = "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp"
-# code query param default from openapi.yaml (Azure Function key)
 BRIDGE_FUNCTION_KEY_DEFAULT = "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
 TEXT2SQL_URL = f"{BRIDGE_BASE}/text2sql?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
-
-# Legacy (direct MCP / auth exchange)
-_DEFAULT_AUTH_ENDPOINT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
-_DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
 
 
 def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) -> str:
@@ -29,7 +25,7 @@ def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) 
             "SOLIDDATA_MANAGEMENT_KEY looks like a placeholder. "
             "Replace it in .env with your real SolidData management key."
         )
-    auth_endpoint = os.environ.get("AUTH_ENDPOINT", _DEFAULT_AUTH_ENDPOINT)
+    auth_endpoint = os.environ.get("AUTH_ENDPOINT", AUTH_ENDPOINT_DEFAULT)
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(
             auth_endpoint,
@@ -89,9 +85,10 @@ class SolidMcpTool(BaseTool):
     args_schema: Type[BaseModel] = SolidText2SQLInput
 
     env_vars: dict = {
-        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key (exchanged for JWT in step 1).",
         "SEMANTIC_LAYER_ID": "Optional. Fallback for semantic_layer_id if not passed.",
-        "TEXT2SQL_URL": "Optional. Bridge URL with path and code (default uses BRIDGE_BASE/text2sql?code=...).",
+        "AUTH_ENDPOINT": "Optional. Auth exchange URL (default from openapi.yaml).",
+        "TEXT2SQL_URL": "Optional. Bridge text2sql URL with ?code= (default BRIDGE_BASE/text2sql?code=...).",
     }
 
     def _run(
@@ -112,33 +109,23 @@ class SolidMcpTool(BaseTool):
         if not layer_id:
             return "Error: semantic_layer_id is missing. Pass it as an argument or set SEMANTIC_LAYER_ID."
 
-        management_key = (
-            (os.environ.get("SOLIDDATA_MANAGEMENT_KEY") or "").strip()
-        )
-        if not management_key:
-            return (
-                "Error: SOLIDDATA_MANAGEMENT_KEY is missing. "
-                "Set it in your environment or .env."
-            )
-        if "your_management_key" in management_key.lower() or "here" in management_key.lower():
-            return (
-                "Error: SOLIDDATA_MANAGEMENT_KEY looks like a placeholder. "
-                "Replace it with your real Solid management key."
-            )
+        try:
+            token = _get_mcp_token()
+        except ValueError as e:
+            return str(e)
 
         url = os.environ.get("TEXT2SQL_URL", TEXT2SQL_URL)
-        payload = {
-            "management_key": management_key,
-            "question": q,
-            "semantic_layer_ids": [layer_id],
-        }
+        payload = {"question": q, "semantic_layer_ids": [layer_id]}
 
         try:
-            with httpx.Client(timeout=60.0) as client:
+            with httpx.Client(timeout=120.0) as client:
                 resp = client.post(
                     url,
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
                 )
             if resp.status_code == 401:
                 return (
