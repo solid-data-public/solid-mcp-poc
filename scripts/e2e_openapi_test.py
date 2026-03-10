@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-Validate the OpenAPI contract only via REST (what Workato would do).
+Validate the OpenAPI contract via a single REST call (what Workato would do).
 
-This script makes the same HTTP calls a Workato custom connector would: (1) POST
-to the auth endpoint to get a token, (2) POST to the text2sql endpoint with
-Bearer token and JSON body. No CrewAI or MCP client. If text2sql returns 404,
-the backend may not expose that REST endpoint yet; the OpenAPI spec is still
-correct for when it does (or for a REST-to-MCP bridge).
+This script makes the same HTTP call a Workato custom connector would: one POST
+to the bridge /text2sql endpoint with management_key, question, and
+semantic_layer_ids in the body. No separate auth step—the bridge exchanges the
+management key for a JWT internally. No CrewAI or MCP client.
 
 Usage:
   # From .env (script loads .env from repo root when python-dotenv is available):
   python scripts/e2e_openapi_test.py
 
-  # Interactive: after auth, you are prompted for question and semantic_layer_ids (comma-separated UUIDs).
+  # Interactive: you are prompted for question and semantic_layer_ids (comma-separated UUIDs).
   # Press Enter to use defaults: question = "How much revenue was generated in 2024 by product category?"
   # and semantic_layer_ids = [SEMANTIC_LAYER_ID] or the built-in default.
 
@@ -38,23 +37,16 @@ try:
 except ImportError:
     pass
 
-AUTH_URL = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
 DEFAULT_SEMANTIC_LAYER_ID = "998b655a-75eb-4873-bb1e-3ddd23164065"
 # text2sql via bridge can be slow (bridge → Solid MCP → response). Override with E2E_TIMEOUT (seconds).
 TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "120"))
 
-# Default text2sql URL (Solid MCP server — returns 404 for REST; use bridge for Workato)
-DEFAULT_TEXT2SQL_URL = "https://mcp.production.soliddata.io/mcp/text2sql"
-# Deployed Azure bridge (use when BRIDGE_FUNCTION_KEY is set or TEXT2SQL_URL points here)
+# Default: Azure bridge (single-call; management_key in body). Override with TEXT2SQL_URL for local/CI.
 BRIDGE_BASE_URL = "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp/text2sql"
 
-TEXT2SQL_URL = os.environ.get("TEXT2SQL_URL", "").strip() or DEFAULT_TEXT2SQL_URL
-# When testing the deployed bridge with function-level auth, set BRIDGE_FUNCTION_KEY (do not commit)
+TEXT2SQL_URL = os.environ.get("TEXT2SQL_URL", "").strip() or BRIDGE_BASE_URL
+# When testing with function-level auth, set BRIDGE_FUNCTION_KEY (do not commit)
 BRIDGE_FUNCTION_KEY = os.environ.get("BRIDGE_FUNCTION_KEY", "").strip()
-
-# If key is set but URL is still Solid's default, use the bridge URL so the request hits Azure
-if BRIDGE_FUNCTION_KEY and TEXT2SQL_URL == DEFAULT_TEXT2SQL_URL:
-    TEXT2SQL_URL = BRIDGE_BASE_URL
 
 # Retries for text2sql (Flex Consumption can return 503 / timeout while instances recycle)
 E2E_RETRY_ATTEMPTS = int(os.environ.get("E2E_RETRY_ATTEMPTS", "3"))
@@ -70,56 +62,33 @@ def main() -> int:
     default_layer_id = (os.environ.get("SEMANTIC_LAYER_ID") or DEFAULT_SEMANTIC_LAYER_ID).strip()
     default_question = "How much revenue was generated in 2024 by product category?"
 
-    with httpx.Client(timeout=TIMEOUT) as client:
-        # 1. Auth exchange (as per OpenAPI: POST auth URL with management_key)
-        resp = client.post(
-            AUTH_URL,
-            json={"management_key": key},
-            headers={"Content-Type": "application/json"},
-        )
-        if resp.status_code != 200:
-            print(f"Auth failed: {resp.status_code} {resp.text}", file=sys.stderr)
-            return 1
-        data = resp.json()
-        if isinstance(data, str):
-            token = data.strip()
-        elif isinstance(data, dict):
-            raw = data.get("token") or data.get("access_token") or data.get("accessToken")
-            token = (raw.strip() if isinstance(raw, str) else "") or ""
+    # Prompt for question and semantic_layer_ids (Enter = use defaults)
+    try:
+        q_in = input(f"Question [{default_question}]: ").strip()
+        question = q_in if q_in else default_question
+        ids_in = input(f"Semantic layer ID(s), comma-separated [{default_layer_id}]: ").strip()
+        if ids_in:
+            semantic_layer_ids = [x.strip() for x in ids_in.split(",") if x.strip()]
         else:
-            print("Auth response was not a string or JSON object.", file=sys.stderr)
-            return 1
-        if not token:
-            print("Auth response missing token/access_token.", file=sys.stderr)
-            return 1
-        if token.lower().startswith("bearer "):
-            token = token[7:].strip()
-
-        # 2. Prompt for question and semantic_layer_ids (Enter = use defaults)
-        try:
-            q_in = input(f"Question [{default_question}]: ").strip()
-            question = q_in if q_in else default_question
-            ids_in = input(f"Semantic layer ID(s), comma-separated [{default_layer_id}]: ").strip()
-            if ids_in:
-                semantic_layer_ids = [x.strip() for x in ids_in.split(",") if x.strip()]
-            else:
-                semantic_layer_ids = [default_layer_id]
-        except EOFError:
-            question = default_question
             semantic_layer_ids = [default_layer_id]
+    except EOFError:
+        question = default_question
+        semantic_layer_ids = [default_layer_id]
 
-        print(f"Calling text2sql: question={question!r}, semantic_layer_ids={semantic_layer_ids}")
+    print(f"Calling text2sql (single-call): question={question!r}, semantic_layer_ids={semantic_layer_ids}")
 
-        # 3. text2sql (as per OpenAPI: POST text2sql URL with Bearer + JSON body)
-        # Retry on 503 or ReadTimeout (Flex Consumption can recycle instances mid-request)
-        url = TEXT2SQL_URL
-        if BRIDGE_FUNCTION_KEY:
-            url = f"{url}{'&' if '?' in url else '?'}code={BRIDGE_FUNCTION_KEY}"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        }
-        payload = {"question": question, "semantic_layer_ids": semantic_layer_ids}
+    # Single POST to bridge: management_key + question + semantic_layer_ids in body (no Bearer header)
+    url = TEXT2SQL_URL
+    if BRIDGE_FUNCTION_KEY:
+        url = f"{url}{'&' if '?' in url else '?'}code={BRIDGE_FUNCTION_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "management_key": key,
+        "question": question,
+        "semantic_layer_ids": semantic_layer_ids,
+    }
+
+    with httpx.Client(timeout=TIMEOUT) as client:
         resp = None
         for attempt in range(E2E_RETRY_ATTEMPTS):
             try:
@@ -148,9 +117,12 @@ def main() -> int:
             body = resp.text or resp.content.decode(errors="replace")
             if resp.status_code == 404:
                 print(
-                    "text2sql returned 404. The OpenAPI spec describes a REST endpoint at "
-                    "https://mcp.production.soliddata.io/mcp/text2sql. If Solid's server only "
-                    "exposes the MCP protocol (no REST), a REST-to-MCP bridge is required for Workato.",
+                    "text2sql returned 404. Check TEXT2SQL_URL and that the bridge is deployed.",
+                    file=sys.stderr,
+                )
+            elif resp.status_code == 401:
+                print(
+                    "text2sql returned 401. Check SOLIDDATA_MANAGEMENT_KEY (missing, invalid, or expired).",
                     file=sys.stderr,
                 )
             else:
@@ -167,7 +139,7 @@ def main() -> int:
             print("text2sql response missing 'message' field.", file=sys.stderr)
             return 1
 
-    print("OK: Auth and text2sql (REST) succeeded; OpenAPI contract validated.")
+    print("OK: Single-call text2sql (OpenAPI contract) succeeded.")
     print("Response message:", body.get("message", ""))
     return 0
 

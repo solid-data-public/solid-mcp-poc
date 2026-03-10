@@ -237,22 +237,60 @@ If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI sp
 
 ### What’s in the spec
 
-- **Auth:** `POST /api/v1/auth/exchange_user_access_key` — exchange a Solid **management key** for a JWT bearer token (host: Solid auth server).
-- **text2sql:** `POST /text2sql` — send a natural-language question and semantic layer ID(s); get back generated SQL and explanation (host: **Azure bridge** by default; the bridge function key is included in the spec as the default for the `code` query parameter, so you do **not** need to set `BRIDGE_FUNCTION_KEY` in env for connector setups).
+The spec defines **one server** (the Azure bridge) and **one operation**: **POST /text2sql**. You send `management_key`, `question`, and `semantic_layer_ids` in the request body. The bridge exchanges the management key for a JWT internally on every call—**no separate auth step**. The Azure Function host key is included in the spec as the default for the `code` query parameter, so you do not need to set `BRIDGE_FUNCTION_KEY` in env for connector setups.
 
 ### Flow for each request
 
-1. **Auth** — Call `exchangeManagementKeyForToken` with `{"management_key": "<your-management-key>"}`. Use the returned `token` or `access_token` for the next step.
-2. **text2sql** — Call the text2sql operation with:
-   - **Authorization:** `Bearer <token from step 1>`
-   - **Body:** `{"question": "...", "semantic_layer_ids": ["<uuid>", ...]}`
-   - When using the **bridge server** (recommended in the spec), the `code` query parameter is already set in the spec; no extra env or config needed for the function key.
+1. Send **one POST** to the bridge `/text2sql` URL with a JSON body containing `management_key`, `question`, and `semantic_layer_ids`.
+2. Optionally include the `code` query parameter if your connector does not use the spec's default (e.g. for a different deployment or key).
+
+No auth endpoint call and no Bearer token handling—the bridge does that for you.
+
+### Example request body
+
+The following JSON payload works with the bridge. Replace the `management_key` with your own Solid management key (and redact it in production); use your semantic layer UUID(s) in `semantic_layer_ids`.
+
+```json
+{
+  "management_key": "K38jsLwZMGgoAhdmQbBai3Bs063rg6R9K2zLsUx7MywBVqcKTFzHbKpvqA9LtaRAF2rnwEm",
+  "question": "What were the top 5 products in terms of revenue",
+  "semantic_layer_ids": [
+    "998b655a-75eb-4873-bb1e-3ddd23164065"
+  ]
+}
+```
+
+### OpenAPI YAML spec walkthrough
+
+This section walks through [openapi.yaml](openapi.yaml) section by section so you can explain it to a team or use it confidently in an automation provider like Workato.
+
+- **`openapi` and `info`**  
+  The file declares OpenAPI version **3.0.3** and a title **"Solid MCP Bridge"**. The `info.description` explains that this is a **single-call** bridge: you POST `management_key`, `question`, and `semantic_layer_ids` in the body; the bridge exchanges the management key for a JWT internally (tokens expire; the bridge handles renewal). **No two-step auth**—callers never manage Bearer tokens. The only credential required is `management_key`. The `code` query parameter (Azure Function key) is described and has a default value in the spec.
+
+- **`servers`**  
+  There is a single server: the Azure bridge base URL (e.g. `https://...azurewebsites.net/api/mcp`). All paths in the spec are relative to this URL, so the full URL for the only operation is `.../api/mcp/text2sql`.
+
+- **`paths` / `/text2sql`**  
+  One path, one operation:
+  - **Method:** POST only (no GET).
+  - **`operationId: text2sql`** — Automation tools (e.g. Workato) use this as the operation name when you import the spec.
+  - **`parameters`** — The `code` query parameter is the Azure Function host key. It is optional and has a default in the spec so connectors can work without extra config.
+  - **`requestBody`** — Required; content type `application/json`; schema is `Text2SqlRequest`. The spec includes examples (e.g. basic single-layer and multi-layer).
+  - **`responses`** — **200**: success; response body has a `message` field with the generated SQL and explanation (often markdown). **400**: bad request (missing or invalid body). **401**: auth failed (management_key missing, invalid, or expired). **405**: method not allowed (use POST). **502**: upstream Solid/MCP error.
+
+- **`components/schemas`**  
+  Three schemas:
+  - **Text2SqlRequest** — Required fields: `management_key` (string), `question` (string), `semantic_layer_ids` (array of UUID strings, at least one). The management key is the only credential; no Bearer token is sent.
+  - **Text2SqlResponse** — Required field: `message` (string), containing the MCP text2sql result (SQL and natural-language explanation, often with markdown code blocks).
+  - **ErrorResponse** — Required field: `error` (string), a human-readable error message.
+
+**How Workato (or any automation provider) uses this:** Import the OpenAPI spec → the connector gets one operation, "text2sql" → configure the connection with your Solid management key (stored as a secret) → in a recipe or flow, send one HTTP POST with that key, the question, and semantic layer ID(s) in the body. No token handling.
 
 ### How to use it
 
-- **Workato:** Create a custom connector and import the OpenAPI spec (paste the contents of `openapi.yaml` or point to its URL). Configure the connection with your Solid **management key**. In the recipe, call the auth operation first, then pass the token into the text2sql step’s Authorization header (e.g. `"Bearer " & step_1.body.token`).
-- **Power Platform / Copilot Studio:** Import the spec as a custom connector or use an HTTP action; set the request URL to the bridge’s text2sql endpoint (the spec’s default server already includes the bridge URL and function key). Use a flow variable for the management key and call auth once per run, then pass the token to the text2sql request.
-- **API testers:** Import `openapi.yaml`. For Bearer auth, use the raw token (no extra “Bearer ” prefix if the tool adds it automatically). Run auth, then text2sql with the returned token.
+- **Workato:** Create a custom connector and import the OpenAPI spec (paste the contents of `openapi.yaml` or point to its URL). Configure the connection with your Solid **management key**. In the recipe, call the **text2sql** operation once: map the management key from the connection (or include it in the body as in the spec), and pass the question and semantic_layer_ids. No auth step.
+- **Power Platform / Copilot Studio:** Import the spec as a custom connector or use an HTTP action pointing at the bridge's text2sql endpoint. Store the management key in a flow variable or connection; send one POST with body `management_key`, `question`, and `semantic_layer_ids`. No prior auth call.
+- **API testers:** Import `openapi.yaml`, set the request body to the example shape above, and send one POST to the text2sql URL (with `code` if needed). No Bearer header.
 
 The **Azure bridge** that exposes MCP as REST is deployed and documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root `openapi.yaml` is the single source of truth for the **bridge URL and function key** when using REST/OpenAPI clients.
 
@@ -266,8 +304,8 @@ solid-mcp-poc/                  # Repo root
 ├── pyproject.toml
 ├── README.md
 ├── uv.lock
-├── openapi.yaml                # OpenAPI 3.0 (auth + text2sql); bridge URL + function key in spec—see "Using the OpenAPI spec" above
-├── scripts/e2e_openapi_test.py # E2E test for OpenAPI contract; use TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for local/CI
+├── openapi.yaml                # OpenAPI 3.0 single-call bridge (POST /text2sql); see "Using the OpenAPI spec" above
+├── scripts/e2e_openapi_test.py # E2E test: single POST with management_key in body to bridge; TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for local/CI
 ├── solid-mcp-bridge/           # Azure Function App: REST-to-MCP bridge (see solid-mcp-bridge/README.md)
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
