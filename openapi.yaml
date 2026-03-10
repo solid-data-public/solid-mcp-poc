@@ -1,81 +1,48 @@
 openapi: 3.0.3
 info:
-  title: Solid MCP API
+  title: Solid MCP Bridge
   description: |
-    API for Solid's MCP text2sql tool. Converts a natural-language question and
-    semantic layer ID(s) into a SQL query and explanation.
+    Single-call bridge for Solid's MCP text2sql tool.
 
-    **Two-step flow (same as sandbox)**
-    1. **Auth** — POST to the auth endpoint (no /text2sql in URL) with `management_key`
-       to get a JWT. Use the backend URL for this step only.
-    2. **text2sql** — POST to the bridge URL that includes `/text2sql?code=...` with
-       `Authorization: Bearer <token>` and body `question` + `semantic_layer_ids`.
-    No management_key in the text2sql request; the Bearer token is the auth.
-  version: 1.0.0
+    **How it works**
+    - POST `management_key`, `question`, and `semantic_layer_ids` in the request body.
+    - The bridge exchanges the management key for a JWT internally on every call
+      (JWT tokens expire; the bridge handles renewal automatically).
+    - Returns the generated SQL and explanation in the `message` field.
+
+    **No two-step auth needed.** Callers never need to manage Bearer tokens.
+    The `management_key` is the only credential required.
+
+    **Azure Function key** — include the `code` query parameter (pre-filled below)
+    to authenticate with the Azure Function host.
+  version: 2.0.0
   contact:
     name: Solid
 
 servers:
-  - url: https://backend.production.soliddata.io
-    description: Solid auth server (request 1 — exchange management key for JWT only)
-  - url: "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp/text2sql?code=DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
-    description: Bridge for text2sql (request 2 — path and function key in URL; send Bearer token)
-
-tags:
-  - name: Auth
-    description: Exchange management key for JWT bearer token
-  - name: MCP
-    description: Solid MCP text2sql via bridge
-
-security:
-  - BearerAuth: []
+  - url: https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp
+    description: Solid MCP Azure bridge
 
 paths:
-  /api/v1/auth/exchange_user_access_key:
-    servers:
-      - url: https://backend.production.soliddata.io
+  /text2sql:
     post:
-      tags:
-        - Auth
-      summary: Exchange management key for JWT token
-      description: |
-        Request 1 — POST the management key to obtain a JWT. Then call the text2sql
-        endpoint (bridge URL with /text2sql?code=...) with header
-        "Authorization: Bearer {token}".
-      operationId: exchangeManagementKeyForToken
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AuthExchangeRequest'
-      responses:
-        '200':
-          description: Success. Returns a JWT for use as Bearer on the text2sql call.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthExchangeResponse'
-        '401':
-          description: Invalid or expired management key.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /:
-    servers:
-      - url: "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp/text2sql?code=DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
-    post:
-      tags:
-        - MCP
       summary: Convert natural language to SQL
       description: |
-        Request 2 — Call after auth. Sends question and semantic_layer_ids to the
-        bridge. Use the token from exchangeManagementKeyForToken in the
-        Authorization header as "Bearer {token}". Body does not include management_key.
+        Send a natural-language question and one or more semantic layer IDs.
+        Include your Solid `management_key` in the body — the bridge handles
+        authentication with Solid automatically.
       operationId: text2sql
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+          description: |
+            Azure Function host key. Pre-filled with the default value.
+            Include this on every call to authenticate with the Azure Function host.
       requestBody:
         required: true
         content:
@@ -83,33 +50,35 @@ paths:
             schema:
               $ref: '#/components/schemas/Text2SqlRequest'
             examples:
-              singleLayer:
-                summary: Single semantic layer
+              basic:
+                summary: Basic query
                 value:
+                  management_key: "<your-solid-management-key>"
                   question: "How many orders were placed last month?"
                   semantic_layer_ids: ["00000000-0000-0000-0000-000000000000"]
-              multipleLayers:
+              multiLayer:
                 summary: Multiple semantic layers
                 value:
+                  management_key: "<your-solid-management-key>"
                   question: "What is total revenue by region?"
                   semantic_layer_ids:
                     - "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
                     - "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
       responses:
         '200':
-          description: Success. Returns the MCP text2sql result (SQL and explanation).
+          description: Success. Returns the MCP text2sql result.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Text2SqlResponse'
         '400':
-          description: Bad request (missing or invalid body).
+          description: Bad request — missing or invalid body fields.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Missing or invalid Authorization (Bearer) header.
+          description: Auth failed — management_key is missing, invalid, or expired.
           content:
             application/json:
               schema:
@@ -121,59 +90,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '502':
-          description: MCP call failed (e.g. Solid server error).
+          description: MCP call failed (upstream Solid server error).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
 components:
-  securitySchemes:
-    BearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Token from exchangeManagementKeyForToken. Use on the text2sql request only.
-
   schemas:
-    AuthExchangeRequest:
-      type: object
-      required:
-        - management_key
-      properties:
-        management_key:
-          type: string
-          description: Solid management key (from connection or environment).
-          example: "<your-management-key>"
-
-    AuthExchangeResponse:
-      type: object
-      description: Use token or access_token (whichever is present) as Bearer for text2sql.
-      properties:
-        token:
-          type: string
-          description: JWT bearer token for the text2sql call.
-        access_token:
-          type: string
-          description: Alternative field name for JWT (use token or access_token).
-
     Text2SqlRequest:
       type: object
       required:
+        - management_key
         - question
         - semantic_layer_ids
       properties:
+        management_key:
+          type: string
+          description: |
+            Solid management key. Store this as a fixed connection credential
+            in Workato / Copilot Studio. The bridge uses this to obtain a
+            short-lived JWT on every call — you never handle tokens directly.
+          example: "<your-solid-management-key>"
         question:
           type: string
-          description: Natural-language question to convert into a SQL query.
+          description: Natural-language question to convert into SQL.
           example: "How many users signed up last month?"
         semantic_layer_ids:
           type: array
           items:
             type: string
             format: uuid
-          description: UUID(s) of the Solid semantic layer. Non-empty array.
           minItems: 1
+          description: UUID(s) of the Solid semantic layer(s) to query.
           example: ["00000000-0000-0000-0000-000000000000"]
 
     Text2SqlResponse:
@@ -183,7 +132,9 @@ components:
       properties:
         message:
           type: string
-          description: Result from Solid MCP text2sql (SQL and explanation, often with markdown code blocks).
+          description: |
+            Result from Solid MCP text2sql. Typically includes generated SQL
+            and a natural-language explanation, often with markdown code blocks.
 
     ErrorResponse:
       type: object
