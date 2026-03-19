@@ -94,6 +94,13 @@ A browser window opens. Add an MCP server:
 - **Transport:** choose the option that matches Solid’s MCP (e.g. **Streamable HTTP** if available, or the HTTP/URL option).
 - **URL:** your SolidData MCP URL (e.g. `https://mcp.production.soliddata.io/mcp`; for dev use the dev MCP URL).
 - **Headers:** add `Authorization: Bearer <token>`. Get the token by exchanging your `SOLIDDATA_MANAGEMENT_KEY` at the SolidData auth endpoint (same as in `.env.example`), or use a small script/curl as in this repo’s auth flow.
+  Example standalone token exchange:
+
+  ```bash
+  curl --location 'https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key' \
+    --header 'Content-Type: application/json' \
+    --data '{"management_key": "K3AoX3zET7PGeE1pTlYRMVmB7qcgtVb4sclytSHv93thS79pV4hG45SuEiLMm9e8g2R834X"}'
+  ```
 
 Then use the Inspector UI to list tools and call **text2sql** to confirm the connection works before running the full crew.
 
