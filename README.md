@@ -99,7 +99,7 @@ A browser window opens. Add an MCP server:
   ```bash
   curl --location 'https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key' \
     --header 'Content-Type: application/json' \
-    --data '{"management_key": "K3AoX3zET7PGeE1pTlYRMVmB7qcgtVb4sclytSHv93thS79pV4hG45SuEiLMm9e8g2R834X"}'
+    --data '{"management_key": "YOUR-SOLID-MGMT-KEY-HERE"}'
   ```
 
 Then use the Inspector UI to list tools and call **text2sql** to confirm the connection works before running the full crew.
@@ -259,7 +259,7 @@ The following JSON payload works with the bridge. Replace the `management_key` w
 
 ```json
 {
-  "management_key": "K38jsLwZMGgoAhdmQbBai3Bs063rg6R9K2zLsUx7MywBVqcKTFzHbKpvqA9LtaRAF2rnwEm",
+  "management_key": "YOUR-SOLID-MGMT-KEY-HERE",
   "question": "What were the top 5 products in terms of revenue",
   "semantic_layer_ids": [
     "998b655a-75eb-4873-bb1e-3ddd23164065"
