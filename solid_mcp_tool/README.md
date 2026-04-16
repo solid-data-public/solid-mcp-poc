@@ -1,6 +1,8 @@
 # Solid MCP Tool (CrewAI Custom Tool)
 
-CrewAI **BaseTool** implementations that call SolidData via the Azure MCP bridge (same pattern as the demo’s MCP session):
+CrewAI **`BaseTool`** implementations that talk to SolidData through the **Azure REST-to-MCP bridge** (plain `httpx` POSTs). They are **not** the same transport as the repo demo: in **`soliddata_mcp_poc`**, the crew uses **`MCPServerHTTP`** to Solid’s **MCP URL** with a **Bearer** token from the same management-key exchange — that **direct MCP** path is the usual CrewAI + Solid approach when you do not need the bridge.
+
+Use this package when you want tools without wiring MCP HTTP/streaming, or when AMP flows standardize on the bridge URLs.
 
 - **`SolidMcpTool` (`solid_text2sql`)** — natural-language question in → SQL + explanation out. No query execution.
 - **`SolidGlossarySearchTool` (`solid_glossary_search`)** — glossary / terminology question in → synthesized glossary answer out.

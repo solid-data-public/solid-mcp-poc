@@ -67,7 +67,7 @@ Question (natural language)
    Result printed in terminal only
 ```
 
-- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and can call **text2sql** or **glossary_search** from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool package (bridge-backed **solid_text2sql** and **solid_glossary_search**) for other crews or **CrewAI Enterprise (AMP)**; this demo does not import those tools directly.
+- The **SQL Analyst** connects **directly** to SolidData’s MCP server via **MCPServerHTTP** in `crew.py`: `auth.py` exchanges the management key for a **Bearer** token, then the client calls Solid’s MCP URL with that header (typical CrewAI + MCP pattern — **not** through the Azure REST bridge). The **`solid_mcp_tool/`** folder is an optional, publishable alternative: **BaseTool** classes that call the **HTTP MCP bridge** with the same JWT (see Part 2); use them when you want tools without wiring `MCPServerHTTP`. This demo does not import `solid_mcp_tool` directly.
 - **Snowflake** is used only via the **Snowflake Python connector** (`snowflake_connector_tool.py`) with username/password; no Snowflake MCP or PAT. Query results are capped at 1000 rows (configurable on the tool) to keep context manageable.
 
 ---
@@ -173,18 +173,20 @@ soliddata_mcp_poc "How many users signed up last month?"
 
 ## Part 2: Solid MCP as a CrewAI Custom Tool
 
-The **`solid_mcp_tool`** folder contains standalone CrewAI **custom tools** (no crew/agents): they call the Azure MCP bridge with the same auth pattern as the demo and expose **`solid_text2sql`** and **`solid_glossary_search`** so any CrewAI agent can use them. You can publish this to the CrewAI Tool Repository and use it in crews/flows or in **CrewAI Enterprise (AMP / Crew Studio)**.
+**Typical CrewAI + Solid pattern (see Part 1):** exchange the management key for a JWT, then connect **directly** to Solid’s MCP HTTP endpoint with **`Authorization: Bearer …`** (e.g. CrewAI **`MCPServerHTTP`**) and invoke MCP tools such as **text2sql** and **glossary_search**. No Azure bridge is required for that path.
+
+The **`solid_mcp_tool`** folder is an **optional** path for crews that want ordinary **`BaseTool`** callables instead of an MCP transport: each tool still does **management key → JWT** (same auth exchange as the demo), but then calls the **Azure REST-to-MCP bridge** over HTTP (`TEXT2SQL_URL` / `GLOSSARY_URL`). That is useful for **CrewAI Enterprise (AMP)** or recipes where wiring `MCPServerHTTP` is awkward, or where you standardize on the bridge contract. You can publish these tools to the CrewAI Tool Repository and use them in crews/flows.
 
 ### 2.1 What’s in `solid_mcp_tool/`
 
-- **`tool.py`** — Self-contained: auth + bridge HTTP calls. Defines **`SolidMcpTool`** (text2sql) and **`SolidGlossarySearchTool`** (glossary). Declares `env_vars` so CrewAI Enterprise (AMP) injects secrets at runtime.
+- **`tool.py`** — Self-contained: auth exchange + **bridge** HTTP POSTs (not native MCP wire protocol). Defines **`SolidMcpTool`** (text2sql) and **`SolidGlossarySearchTool`** (glossary). Declares `env_vars` so CrewAI Enterprise (AMP) injects secrets at runtime.
 - **`README.md`** — Usage, env vars, publish instructions, and AMP deployment notes.
 
-### 2.2 How it works (tool flow)
+### 2.2 How it works (tool flow — bridge-backed `BaseTool`s)
 
 1. Agent sends arguments to **solid_text2sql** (`question`, optional `semantic_layer_id`) or **solid_glossary_search** (`query` only).
 2. Text2sql: tool reads `SEMANTIC_LAYER_ID` from the environment when not passed. Glossary: no semantic layer in the request body.
-3. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT and POSTs to the Azure bridge (**text2sql** or **glossary** path) with `Authorization: Bearer …`.
+3. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT (same **auth** step as Part 1), then POSTs to the **Azure bridge** (**text2sql** or **glossary** path) with `Authorization: Bearer …` — unlike Part 1, it does **not** open a session to Solid’s MCP URL as the primary transport.
 4. Returns SQL + explanation (text2sql) or glossary text (glossary_search).
 
 ### 2.3 Environment variables (tool)
@@ -234,7 +236,9 @@ After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA
 
 ## Using the OpenAPI spec (Workato, Power Platform, etc.)
 
-If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI spec** (no native MCP or Python SDK), use the root **`openapi.yaml`** to connect to Solid’s MCP **text2sql** and **glossary** search via the **Azure REST-to-MCP bridge**. This applies to:
+If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI spec** (no native MCP or Python SDK), use the root **`openapi.yaml`** to connect to Solid’s MCP **text2sql** and **glossary** search via the **Azure REST-to-MCP bridge**. **CrewAI with MCP** (this repo’s [Part 1](#part-1-run-the-demo-terminal-only)) usually skips the bridge: exchange the management key for a JWT, then call Solid’s **MCP URL** with **`Authorization: Bearer …`** (native MCP tools). The bridge is for REST/OpenAPI-only stacks.
+
+This OpenAPI path applies to:
 
 - **Workato** (custom connector)
 - **Microsoft Power Platform / Copilot Studio** (custom connector or HTTP action)
