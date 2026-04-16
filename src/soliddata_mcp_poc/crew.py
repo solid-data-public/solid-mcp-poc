@@ -1,4 +1,4 @@
-"""CrewAI crew that uses the SolidData MCP server for text2sql and Snowflake connector for execution."""
+"""CrewAI crew that uses the SolidData MCP server (text2sql, glossary_search) and Snowflake connector."""
 
 from typing import Optional
 
@@ -25,12 +25,12 @@ def build_crew(
     snowflake_warehouse: Optional[str] = None,
     snowflake_role: Optional[str] = None,
 ) -> Crew:
-    """Build the crew: SQL Analyst (Solid MCP text2sql) -> [optional: Snowflake Executor] -> Reporter.
+    """Build the crew: SQL Analyst (Solid MCP text2sql / glossary_search) -> [optional: Snowflake Executor] -> Reporter.
 
     Flow:
-    1. SQL Analyst uses Solid MCP text2sql to generate SQL from the user question.
+    1. SQL Analyst uses Solid MCP **text2sql** for data questions, or **glossary_search** for definitions / acronyms / terminology.
     2. If Snowflake connector config is provided: an executor runs that SQL via the Snowflake Python connector and returns results.
-    3. Reporter explains the query and, when Snowflake was used, analyzes the actual query results; otherwise explains what the SQL does.
+    3. Reporter explains the query and, when Snowflake was used, analyzes the actual query results; otherwise explains what the SQL does or summarizes glossary output.
     """
     # Shared LLM with enough output space to avoid truncation/empty responses (e.g. Snowflake result passthrough).
     llm = LLM(
@@ -50,13 +50,14 @@ def build_crew(
     sql_analyst = Agent(
         role="SQL Data Analyst",
         goal=(
-            "Convert the user's natural-language question into an accurate SQL query "
-            "using the text2sql MCP tool provided by SolidData."
+            "Answer the user's question using SolidData MCP tools: use **glossary_search** for "
+            "terminology, definitions, and acronyms; use **text2sql** when the user needs a query "
+            "against the semantic layer / warehouse."
         ),
         backstory=(
-            "You are a senior data analyst who turns business questions into "
-            "precise SQL queries. You always use the text2sql tool — never guess "
-            "the schema or make up table names."
+            "You are a senior data analyst. For data and metrics questions you use the **text2sql** "
+            "tool and never guess schema or table names. For 'what does X mean?' or glossary-style "
+            "questions you use **glossary_search** with a clear `query` string instead of inventing definitions."
         ),
         llm=llm,
         mcps=[mcp],
@@ -91,12 +92,16 @@ def build_crew(
         )
         sql_executor = Agent(
             role="Snowflake SQL Executor",
-            goal="Execute the SQL from the previous step in Snowflake and return the raw tool output in full.",
+            goal=(
+                "When the prior step produced executable SQL from text2sql, run it in Snowflake and return "
+                "the raw tool output. When the prior step was glossary-only, skip execution and say so."
+            ),
             backstory=(
-                "You run SQL in Snowflake via the snowflake_sql_executor tool. You receive the exact SQL "
-                "from the SQL Analyst. You call the tool with the single argument 'query' set to the exact SQL string. "
-                "You must return the complete tool response (JSON rows or error) in your final answer — never summarize, "
-                "truncate, or return an empty response."
+                "You run SQL in Snowflake via the snowflake_sql_executor tool only when you have a real "
+                "SELECT (or other warehouse) statement from text2sql. If the SQL Analyst used glossary_search "
+                "and there is no SQL to run, do not call the tool — explain that Snowflake was skipped. "
+                "When you do run SQL, call the tool with argument 'query' set to the exact SQL string and "
+                "return the complete tool response in full."
             ),
             llm=executor_llm,
             tools=[snowflake_tool],
@@ -106,14 +111,15 @@ def build_crew(
     reporter = Agent(
         role="Report Writer",
         goal=(
-            "Produce a clear, stakeholder-friendly summary. When query results are available, "
-            "analyze those results; otherwise explain what the SQL does."
+            "Produce a clear, stakeholder-friendly summary: from Snowflake results, from SQL alone, "
+            "or from glossary / terminology answers when no SQL was involved."
         ),
         backstory=(
             "You are an expert at explaining data and queries in plain language. "
             "When you receive actual query results from Snowflake, you summarize the data, "
             "highlight key numbers or trends, and write a concise report. When you only "
-            "receive a SQL query, you explain what the query does in business terms."
+            "receive a SQL query, you explain what the query does in business terms. "
+            "When the prior steps are glossary-focused, summarize the definitions clearly for stakeholders."
         ),
         llm=llm,
         verbose=True,
@@ -121,27 +127,37 @@ def build_crew(
 
     generate_sql = Task(
         description=(
-            f'Use the text2sql MCP tool to generate sql query using the following user question as input.'
-            f' The question is: \n\n"{user_question}"\n\n'
-            f'The semantic layer id: {semantic_layer_id}\n\n'
-            f'Return the SQL query and a one-sentence explanation of what it does.'
+            f'User question:\n\n"{user_question}"\n\n'
+            f'Semantic layer id (required only for **text2sql**): {semantic_layer_id}\n\n'
+            "1. If the user is asking what a term, acronym, or field **means**, or wants a **definition** "
+            "from the business glossary (not warehouse data): call the MCP tool **glossary_search** "
+            "with `query` set to the user's question (or the specific term).\n"
+            "2. Otherwise, for questions that need **SQL or data from tables**: call **text2sql** with "
+            "the user question and the semantic layer id above.\n"
+            "3. Return either the glossary result in plain language, or the SQL plus a one-sentence "
+            "explanation of what the query retrieves."
         ),
-        expected_output="The SQL query and a brief explanation of what it retrieves.",
+        expected_output=(
+            "Either a glossary-style answer from glossary_search, or the SQL query from text2sql "
+            "with a brief explanation of what it retrieves."
+        ),
         agent=sql_analyst,
     )
 
     if use_snowflake:
         execute_sql = Task(
             description=(
-                "Using the SQL query from the previous task output:\n"
-                "1. Extract the exact SQL statement (only the SQL, no markdown or explanation).\n"
-                "2. Call the snowflake_sql_executor tool with argument \"query\" set to the exact SQL string.\n"
-                "3. In your final answer, return the complete tool output (full JSON or error). "
-                "Your response must not be empty — include the entire tool result."
+                "Using the previous task output:\n"
+                "1. If there is **no** executable SQL (e.g. the analyst answered with **glossary_search** only): "
+                "do **not** call snowflake_sql_executor. Reply that Snowflake execution was skipped because "
+                "no SQL was generated.\n"
+                "2. If there **is** SQL from text2sql: extract the exact SQL statement (only the SQL, no markdown).\n"
+                "3. Call snowflake_sql_executor with argument \"query\" set to that SQL string.\n"
+                "4. Return the complete tool output (full JSON or error), or the skip message from step 1."
             ),
             expected_output=(
-                "The complete raw result from snowflake_sql_executor (full JSON array of rows or error object). "
-                "Never an empty or truncated response."
+                "Either the complete raw result from snowflake_sql_executor, or an explicit note that "
+                "execution was skipped because no SQL was produced."
             ),
             agent=sql_executor,
             context=[generate_sql],
@@ -154,11 +170,13 @@ def build_crew(
             "highlight key numbers or findings, and write a short report (2-4 sentences) "
             "suitable for a business stakeholder.\n"
             "2. If you only have a SQL query and explanation: explain in plain language "
-            "what the query does (tables, filters, purpose) and write a short stakeholder report."
+            "what the query does (tables, filters, purpose) and write a short stakeholder report.\n"
+            "3. If the flow was glossary-only (definitions / acronyms, no SQL): write a short, clear "
+            "report from the glossary content — do not invent SQL or metrics."
         ),
         expected_output=(
-            "A concise stakeholder report. When results were provided, base it on the data; "
-            "otherwise explain what the SQL retrieves."
+            "A concise stakeholder report: data-driven when Snowflake ran, SQL-explained when only "
+            "text2sql ran, or terminology-focused when glossary_search was used."
         ),
         agent=reporter,
         context=[generate_sql, execute_sql] if use_snowflake else [generate_sql],

@@ -1,16 +1,26 @@
 # Solid MCP Tool (CrewAI Custom Tool)
 
-CrewAI **BaseTool** that calls SolidData's MCP **text2sql**: natural-language question in → SQL + explanation out. No query execution.
+CrewAI **BaseTool** implementations that call SolidData via the Azure MCP bridge (same pattern as the demo’s MCP session):
 
-Works in both **terminal crews** and **CrewAI Enterprise (AMP / Crew Studio)**. The tool declares its required environment variables via `env_vars` so AMP injects them automatically.
+- **`SolidMcpTool` (`solid_text2sql`)** — natural-language question in → SQL + explanation out. No query execution.
+- **`SolidGlossarySearchTool` (`solid_glossary_search`)** — glossary / terminology question in → synthesized glossary answer out.
 
-## How it works
+Works in both **terminal crews** and **CrewAI Enterprise (AMP / Crew Studio)**. Each tool declares environment variables via `env_vars` so AMP injects them automatically.
+
+## How it works (text2sql — `SolidMcpTool`)
 
 1. Agent sends `{question}` (and optionally `semantic_layer_id` to override the env var).
 2. Tool reads `SEMANTIC_LAYER_ID` from the environment (or uses the override).
-3. Tool authenticates with SolidData using `SOLIDDATA_MANAGEMENT_KEY`.
-4. Tool calls MCP `text2sql` with `{"question": ..., "semantic_layer_id": ...}`.
-5. Returns the generated SQL and explanation.
+3. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT.
+4. Tool POSTs to the bridge **text2sql** URL with `Authorization: Bearer …` and JSON `question` + `semantic_layer_ids`.
+5. Returns the generated SQL and explanation (from the bridge `message` field).
+
+## How it works (glossary — `SolidGlossarySearchTool`)
+
+1. Agent sends `{query}` (natural-language term or “what does X mean?” style question).
+2. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT (same as text2sql).
+3. Tool POSTs to the bridge **glossary** URL with `Authorization: Bearer …` and JSON `{"query": "..."}` only (no semantic layer in the body).
+4. Returns the glossary result (synthesized answer / status from the bridge `result` object).
 
 ## Environment variables
 
@@ -19,9 +29,10 @@ Set these in `.env` (local) or in **CrewAI Enterprise tool config** (AMP). The t
 | Variable | Required | Description |
 |---|---|---|
 | `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access. |
-| `SEMANTIC_LAYER_ID` | Yes | UUID of the semantic layer (passed as MCP argument). |
-| `AUTH_ENDPOINT` | No | Override auth URL. Default: production. |
-| `MCP_SERVER_URL` | No | Override MCP URL. Default: production. |
+| `SEMANTIC_LAYER_ID` | Yes for **text2sql** | UUID of the semantic layer (passed to the bridge as `semantic_layer_ids`). Not used by **glossary**. |
+| `AUTH_ENDPOINT` | No | Override auth exchange URL. Default: production. |
+| `TEXT2SQL_URL` | No | Override bridge text2sql URL (includes `?code=` function key if required). |
+| `GLOSSARY_URL` | No | Override bridge glossary URL (includes `?code=` if required). |
 
 ## Dependencies
 
@@ -62,4 +73,4 @@ Do this in a **normal terminal**, in a new folder.
 
 ## Using in CrewAI Enterprise (AMP)
 
-After publishing, add the tool to your crew in Crew Studio. In the **tool configuration**, set the required env vars (`SOLIDDATA_MANAGEMENT_KEY`, `SEMANTIC_LAYER_ID`). AMP reads the `env_vars` declared on the tool class and injects them into `os.environ` before the tool runs.
+After publishing, add one or both tools to your crew in Crew Studio. For **text2sql**, set `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID`. For **glossary_search**, only `SOLIDDATA_MANAGEMENT_KEY` is required. AMP reads the `env_vars` declared on each tool class and injects them into `os.environ` before the tool runs.

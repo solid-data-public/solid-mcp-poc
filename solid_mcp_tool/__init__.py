@@ -1,6 +1,16 @@
-"""SolidData MCP text2sql as a CrewAI custom tool."""
+"""SolidData MCP text2sql and glossary_search as CrewAI custom tools."""
 
-from .tool import SolidMcpTool, SolidText2SQLTool
+from .tool import (
+    SolidGlossarySearchTool,
+    SolidMcpGlossaryTool,
+    SolidMcpTool,
+    SolidText2SQLTool,
+)
 
-__all__ = ["SolidMcpTool", "SolidText2SQLTool"]
+__all__ = [
+    "SolidGlossarySearchTool",
+    "SolidMcpGlossaryTool",
+    "SolidMcpTool",
+    "SolidText2SQLTool",
+]
 

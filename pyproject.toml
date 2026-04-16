@@ -1,7 +1,7 @@
 [project]
 name = "soliddata_mcp_poc"
 version = "0.1.0"
-description = "CrewAI POC — agent that uses SolidData MCP for text2sql"
+description = "CrewAI POC — agent that uses SolidData MCP (text2sql, glossary_search)"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [

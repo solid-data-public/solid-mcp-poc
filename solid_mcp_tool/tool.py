@@ -5,11 +5,12 @@ import httpx
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# From openapi.yaml: auth (request 1) then bridge text2sql (request 2)
+# Auth exchange, then bridge calls (Bearer + JSON) for text2sql / glossary.
 AUTH_ENDPOINT_DEFAULT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
 BRIDGE_BASE = "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp"
 BRIDGE_FUNCTION_KEY_DEFAULT = "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
 TEXT2SQL_URL = f"{BRIDGE_BASE}/text2sql?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
+GLOSSARY_URL = f"{BRIDGE_BASE}/glossary?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
 
 
 def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) -> str:
@@ -145,3 +146,80 @@ class SolidMcpTool(BaseTool):
 
 # Alias for code that imports the descriptive name
 SolidText2SQLTool = SolidMcpTool
+
+
+class SolidGlossarySearchInput(BaseModel):
+    """Input for the Solid glossary search tool."""
+
+    query: str = Field(
+        ...,
+        description="Natural-language question or term to look up in the SolidData glossary.",
+    )
+
+
+class SolidGlossarySearchTool(BaseTool):
+    """CrewAI tool that calls SolidData MCP glossary_search via the same bridge + Bearer pattern as text2sql."""
+
+    name: str = "solid_glossary_search"
+    description: str = (
+        "Look up definitions, acronyms, and business terms in SolidData's glossary. "
+        "Use this for 'what does X mean?' or terminology questions — not for generating SQL."
+    )
+    args_schema: Type[BaseModel] = SolidGlossarySearchInput
+
+    env_vars: dict = {
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key (exchanged for JWT).",
+        "AUTH_ENDPOINT": "Optional. Auth exchange URL (default from openapi.yaml).",
+        "GLOSSARY_URL": "Optional. Bridge glossary URL with ?code= (default BRIDGE_BASE/glossary?code=...).",
+    }
+
+    def _run(self, query: str = "", **kwargs: Any) -> str:
+        q = (query or "").strip() or (kwargs.get("query") and str(kwargs["query"]).strip()) or ""
+        if not q:
+            return "Error: Input 'query' is missing."
+
+        try:
+            token = _get_mcp_token()
+        except ValueError as e:
+            return str(e)
+
+        url = os.environ.get("GLOSSARY_URL", GLOSSARY_URL)
+        payload = {"query": q}
+
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                resp = client.post(
+                    url,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            if resp.status_code == 401:
+                return (
+                    "Error: Solid returned 401. Check that SOLIDDATA_MANAGEMENT_KEY "
+                    "is correct and not expired."
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "result" in data:
+                inner = data["result"]
+                if isinstance(inner, dict):
+                    parts = []
+                    if inner.get("synthesized_answer"):
+                        parts.append(str(inner["synthesized_answer"]))
+                    if inner.get("answer_status"):
+                        parts.append(f"(status: {inner['answer_status']})")
+                    if inner.get("execution_error"):
+                        parts.append(f"Error: {inner['execution_error']}")
+                    return "\n".join(parts) if parts else str(inner)
+                return str(inner) if inner is not None else "Error: Empty glossary result."
+            return str(data) if data else "Error: Empty response from bridge."
+        except httpx.HTTPStatusError as e:
+            return f"Error from bridge: {e.response.status_code} {e.response.text}"
+        except Exception as e:
+            return f"Error executing Solid glossary tool: {str(e)}"
+
+
+SolidMcpGlossaryTool = SolidGlossarySearchTool

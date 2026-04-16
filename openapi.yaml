@@ -96,6 +96,130 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /glossary:
+    post:
+      summary: Search glossary terms
+      description: |
+        Send a glossary search query.
+        Include your Solid `management_key` in the body — the bridge handles
+        authentication with Solid automatically.
+      operationId: glossarySearch
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+          description: |
+            Azure Function host key. Pre-filled with the default value.
+            Include this on every call to authenticate with the Azure Function host.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlossarySearchRequest'
+            examples:
+              basic:
+                summary: Glossary query
+                value:
+                  management_key: "<your-solid-management-key>"
+                  query: "What is LLS?"
+      responses:
+        '200':
+          description: Success. Returns the MCP glossary_search result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlossarySearchResponse'
+        '400':
+          description: Bad request — missing or invalid body fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Auth failed — management_key is missing, invalid, or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed. Use POST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: MCP call failed (upstream Solid server error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /glossary_search:
+    post:
+      summary: Search glossary terms (alias)
+      description: |
+        Alias route for `/glossary` with identical behavior.
+      operationId: glossarySearchAlias
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+          description: |
+            Azure Function host key. Pre-filled with the default value.
+            Include this on every call to authenticate with the Azure Function host.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlossarySearchRequest'
+            examples:
+              basic:
+                summary: Glossary query
+                value:
+                  management_key: "<your-solid-management-key>"
+                  query: "What is LLS?"
+      responses:
+        '200':
+          description: Success. Returns the MCP glossary_search result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlossarySearchResponse'
+        '400':
+          description: Bad request — missing or invalid body fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Auth failed — management_key is missing, invalid, or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed. Use POST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: MCP call failed (upstream Solid server error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
     Text2SqlRequest:
@@ -125,6 +249,23 @@ components:
           description: UUID(s) of the Solid semantic layer(s) to query.
           example: ["00000000-0000-0000-0000-000000000000"]
 
+    GlossarySearchRequest:
+      type: object
+      required:
+        - management_key
+        - query
+      properties:
+        management_key:
+          type: string
+          description: |
+            Solid management key. The bridge uses this to obtain a
+            short-lived JWT on every call — you never handle tokens directly.
+          example: "<your-solid-management-key>"
+        query:
+          type: string
+          description: Search query for terms/phrases in the glossary.
+          example: "What is LLS?"
+
     Text2SqlResponse:
       type: object
       required:
@@ -135,6 +276,29 @@ components:
           description: |
             Result from Solid MCP text2sql. Typically includes generated SQL
             and a natural-language explanation, often with markdown code blocks.
+
+    GlossarySearchResponse:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          $ref: '#/components/schemas/GlossarySearchResult'
+
+    GlossarySearchResult:
+      type: object
+      properties:
+        synthesized_answer:
+          type: string
+          description: Synthesized glossary answer.
+        answer_status:
+          type: string
+          description: Completeness status of the answer.
+          enum: [full, partial, none]
+        execution_error:
+          type: string
+          nullable: true
+          description: Error text when glossary execution fails.
 
     ErrorResponse:
       type: object

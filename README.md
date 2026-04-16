@@ -67,7 +67,7 @@ Question (natural language)
    Result printed in terminal only
 ```
 
-- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and uses the **text2sql** tool from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool for use in other crews or **CrewAI Enterprise (AMP)**; this demo does not use it directly.
+- The **SQL Analyst** connects to SolidData’s MCP server via **MCPServerHTTP** in `crew.py` (using the token from `auth.py`) and can call **text2sql** or **glossary_search** from that server. The **`solid_mcp_tool/`** folder is a separate, publishable CrewAI custom tool package (bridge-backed **solid_text2sql** and **solid_glossary_search**) for other crews or **CrewAI Enterprise (AMP)**; this demo does not import those tools directly.
 - **Snowflake** is used only via the **Snowflake Python connector** (`snowflake_connector_tool.py`) with username/password; no Snowflake MCP or PAT. Query results are capped at 1000 rows (configurable on the tool) to keep context manageable.
 
 ---
@@ -102,7 +102,7 @@ A browser window opens. Add an MCP server:
     --data '{"management_key": "YOUR-SOLID-MGMT-KEY-HERE"}'
   ```
 
-Then use the Inspector UI to list tools and call **text2sql** to confirm the connection works before running the full crew.
+Then use the Inspector UI to list tools and call **text2sql** (or **glossary_search** with a Bearer-authenticated MCP client) to confirm the connection works before running the full crew.
 
 ---
 
@@ -114,8 +114,8 @@ Simplest path: **ask a question → see the SQL response from Solid and the agen
 ### How It Works
 
 1. **Auth** — `auth.py` exchanges `SOLIDDATA_MANAGEMENT_KEY` for a bearer token (SolidData auth API).
-2. **MCP** — `crew.py` creates an `MCPServerHTTP` client for the SolidData MCP server with that token and attaches it to the SQL Analyst agent.
-3. **SQL Analyst** — Uses the MCP **text2sql** tool (from that server) to get a SQL query + short explanation.
+2. **MCP** — `crew.py` creates an `MCPServerHTTP` client for the SolidData MCP server with that token and attaches it to the SQL Analyst agent (Solid exposes **text2sql** and **glossary_search**; the task text tells the agent when to use each).
+3. **SQL Analyst** — Uses MCP **text2sql** for data questions or **glossary_search** for definitions / terminology.
 4. **Snowflake Executor** *(optional)* — If Snowflake connector is configured, runs that SQL in Snowflake and returns query results.
 5. **Reporter** — If Snowflake ran: summarizes the **query results** and writes a stakeholder report. Otherwise: explains in plain language what the query does.
 6. **Output** — Result is **printed in the terminal only**.
@@ -173,29 +173,28 @@ soliddata_mcp_poc "How many users signed up last month?"
 
 ## Part 2: Solid MCP as a CrewAI Custom Tool
 
-The **`solid_mcp_tool`** folder contains a standalone CrewAI **custom tool** (no crew/agents): it connects to Solid’s MCP and exposes **text2sql** so any CrewAI agent can use it. You can publish this to the CrewAI Tool Repository and use it in crews/flows or in **CrewAI Enterprise (AMP / Crew Studio)**.
+The **`solid_mcp_tool`** folder contains standalone CrewAI **custom tools** (no crew/agents): they call the Azure MCP bridge with the same auth pattern as the demo and expose **`solid_text2sql`** and **`solid_glossary_search`** so any CrewAI agent can use them. You can publish this to the CrewAI Tool Repository and use it in crews/flows or in **CrewAI Enterprise (AMP / Crew Studio)**.
 
 ### 2.1 What’s in `solid_mcp_tool/`
 
-- **`tool.py`** — Self-contained: auth + MCP call. Declares `env_vars` via `EnvVar` so CrewAI Enterprise (AMP) injects required secrets (`SOLIDDATA_MANAGEMENT_KEY`, `SEMANTIC_LAYER_ID`) at runtime.
+- **`tool.py`** — Self-contained: auth + bridge HTTP calls. Defines **`SolidMcpTool`** (text2sql) and **`SolidGlossarySearchTool`** (glossary). Declares `env_vars` so CrewAI Enterprise (AMP) injects secrets at runtime.
 - **`README.md`** — Usage, env vars, publish instructions, and AMP deployment notes.
 
 ### 2.2 How it works (tool flow)
 
-1. Agent sends `{question}` to the tool.
-2. Tool reads `SEMANTIC_LAYER_ID` from environment (injected by AMP via `env_vars` or from `.env` locally).
-3. Tool authenticates with SolidData using `SOLIDDATA_MANAGEMENT_KEY`.
-4. Tool calls MCP `text2sql` with `{"question": ..., "semantic_layer_id": ...}`.
-5. Returns the generated SQL and explanation.
+1. Agent sends arguments to **solid_text2sql** (`question`, optional `semantic_layer_id`) or **solid_glossary_search** (`query` only).
+2. Text2sql: tool reads `SEMANTIC_LAYER_ID` from the environment when not passed. Glossary: no semantic layer in the request body.
+3. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT and POSTs to the Azure bridge (**text2sql** or **glossary** path) with `Authorization: Bearer …`.
+4. Returns SQL + explanation (text2sql) or glossary text (glossary_search).
 
 ### 2.3 Environment variables (tool)
 
 | Variable | Required | Description |
 |---|---|---|
 | `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access. |
-| `SEMANTIC_LAYER_ID` | Yes | UUID of the semantic layer (passed as MCP argument). |
+| `SEMANTIC_LAYER_ID` | Yes for text2sql | UUID of the semantic layer (bridge `semantic_layer_ids`). Not required for glossary. |
 | `AUTH_ENDPOINT` | No | Override auth URL. Default: production. |
-| `MCP_SERVER_URL` | No | Override MCP URL. Default: production. |
+| `TEXT2SQL_URL` / `GLOSSARY_URL` | No | Override bridge URLs (include `?code=` if your deployment requires it). |
 
 In **CrewAI Enterprise**, set these in the **tool configuration** in Crew Studio. The tool class declares them via `env_vars` so AMP injects them into `os.environ` before `_run` executes.
 
@@ -235,7 +234,7 @@ After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA
 
 ## Using the OpenAPI spec (Workato, Power Platform, etc.)
 
-If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI spec** (no native MCP or Python SDK), use the root **`openapi.yaml`** to connect to Solid’s MCP text2sql via the **Azure REST-to-MCP bridge**. This applies to:
+If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI spec** (no native MCP or Python SDK), use the root **`openapi.yaml`** to connect to Solid’s MCP **text2sql** and **glossary** search via the **Azure REST-to-MCP bridge**. This applies to:
 
 - **Workato** (custom connector)
 - **Microsoft Power Platform / Copilot Studio** (custom connector or HTTP action)
@@ -244,14 +243,26 @@ If your agent or platform only supports **HTTP/REST with a Swagger or OpenAPI sp
 
 ### What’s in the spec
 
-The spec defines **one server** (the Azure bridge) and **one operation**: **POST /text2sql**. You send `management_key`, `question`, and `semantic_layer_ids` in the request body. The bridge exchanges the management key for a JWT internally on every call—**no separate auth step**. The Azure Function host key is included in the spec as the default for the `code` query parameter, so you do not need to set `BRIDGE_FUNCTION_KEY` in env for connector setups.
+The spec defines **one server** (the Azure bridge) and **REST operations** for Solid MCP tools:
+
+- **POST /text2sql** — unchanged: send `management_key`, `question`, and `semantic_layer_ids` in the body.
+- **POST /glossary** (and **POST /glossary_search**, an alias with the same behavior) — glossary search: send `management_key` and `query` in the body.
+
+For both bridge paths, the service exchanges the management key for a JWT internally on every call—**no separate auth step**. The Azure Function host key is included in the spec as the default for the `code` query parameter, so you do not need to set `BRIDGE_FUNCTION_KEY` in env for connector setups.
 
 ### Flow for each request
+
+**Text2SQL (unchanged)**
 
 1. Send **one POST** to the bridge `/text2sql` URL with a JSON body containing `management_key`, `question`, and `semantic_layer_ids`.
 2. Optionally include the `code` query parameter if your connector does not use the spec's default (e.g. for a different deployment or key).
 
-No auth endpoint call and no Bearer token handling—the bridge does that for you.
+**Glossary search (bridge — management key in body)**
+
+1. Send **one POST** to the bridge **`/glossary`** or **`/glossary_search`** URL with a JSON body containing **`management_key`** and **`query`** (same single-call pattern as text2sql: the bridge obtains the JWT; you do not send a Bearer token to the bridge).
+2. Optionally include the `code` query parameter like text2sql.
+
+No auth endpoint call and no Bearer token handling for the bridge—the bridge does that for you when you include `management_key` in the body.
 
 ### Example request body
 
@@ -267,37 +278,64 @@ The following JSON payload works with the bridge. Replace the `management_key` w
 }
 ```
 
+**Glossary search (bridge — same base URL as text2sql)**  
+Full URL examples (append path to the bridge base in `servers`, e.g. `https://…azurewebsites.net/api/mcp/glossary` or `…/api/mcp/glossary_search`). Request body:
+
+```json
+{
+  "management_key": "YOUR-SOLID-MGMT-KEY-HERE",
+  "query": "What does LLS mean?"
+}
+```
+
+**Glossary search (Solid MCP directly — already authenticated with Bearer)**  
+If you call Solid’s MCP **glossary_search** tool over HTTP with **`Authorization: Bearer <token>`** (token from the auth exchange, same as for **text2sql** in the Inspector or SDK), the tool argument shape is only the search string—**no `management_key` in the tool payload** (the key was used earlier to get the token). Example argument / body shape:
+
+```json
+{
+  "query": "What does LLS mean?"
+}
+```
+
 ### OpenAPI YAML spec walkthrough
 
 This section walks through [openapi.yaml](openapi.yaml) section by section so you can explain it to a team or use it confidently in an automation provider like Workato.
 
 - **`openapi` and `info`**  
-  The file declares OpenAPI version **3.0.3** and a title **"Solid MCP Bridge"**. The `info.description` explains that this is a **single-call** bridge: you POST `management_key`, `question`, and `semantic_layer_ids` in the body; the bridge exchanges the management key for a JWT internally (tokens expire; the bridge handles renewal). **No two-step auth**—callers never manage Bearer tokens. The only credential required is `management_key`. The `code` query parameter (Azure Function key) is described and has a default value in the spec.
+  The file declares OpenAPI version **3.0.3** and a title **"Solid MCP Bridge"**. The `info.description` focuses on the **text2sql** single-call flow (`management_key`, `question`, `semantic_layer_ids`); the same bridge also documents **glossary** routes that use **`management_key` + `query`** in the body. In all cases the bridge exchanges the management key for a JWT internally (tokens expire; the bridge handles renewal). **No two-step auth on the bridge**—callers never manage Bearer tokens to the bridge; the credential in the body is `management_key`. The `code` query parameter (Azure Function key) is described and has a default value in the spec.
 
 - **`servers`**  
-  There is a single server: the Azure bridge base URL (e.g. `https://...azurewebsites.net/api/mcp`). All paths in the spec are relative to this URL, so the full URL for the only operation is `.../api/mcp/text2sql`.
+  There is a single server: the Azure bridge base URL (e.g. `https://...azurewebsites.net/api/mcp`). All paths in the spec are relative to this URL, so full URLs include `.../api/mcp/text2sql`, `.../api/mcp/glossary`, and `.../api/mcp/glossary_search`.
 
 - **`paths` / `/text2sql`**  
-  One path, one operation:
+  Text2SQL operation (unchanged from prior versions of this doc):
   - **Method:** POST only (no GET).
   - **`operationId: text2sql`** — Automation tools (e.g. Workato) use this as the operation name when you import the spec.
   - **`parameters`** — The `code` query parameter is the Azure Function host key. It is optional and has a default in the spec so connectors can work without extra config.
   - **`requestBody`** — Required; content type `application/json`; schema is `Text2SqlRequest`. The spec includes examples (e.g. basic single-layer and multi-layer).
   - **`responses`** — **200**: success; response body has a `message` field with the generated SQL and explanation (often markdown). **400**: bad request (missing or invalid body). **401**: auth failed (management_key missing, invalid, or expired). **405**: method not allowed (use POST). **502**: upstream Solid/MCP error.
 
+- **`paths` / `/glossary` and `/glossary_search`**  
+  Glossary search via the same bridge pattern as text2sql:
+  - **Method:** POST only. **`/glossary_search`** is an alias of **`/glossary`** with identical request/response.
+  - **`operationId`:** `glossarySearch` / `glossarySearchAlias`.
+  - **`requestBody`** — Schema **GlossarySearchRequest**: required **`management_key`** and **`query`** (natural-language glossary question or term).
+  - **`responses`** — **200**: body includes **`result`** (glossary MCP output: e.g. `synthesized_answer`, `answer_status`, optional `execution_error`). Same **400**, **401**, **405**, **502** semantics as text2sql.
+
 - **`components/schemas`**  
-  Three schemas:
-  - **Text2SqlRequest** — Required fields: `management_key` (string), `question` (string), `semantic_layer_ids` (array of UUID strings, at least one). The management key is the only credential; no Bearer token is sent.
-  - **Text2SqlResponse** — Required field: `message` (string), containing the MCP text2sql result (SQL and natural-language explanation, often with markdown code blocks).
+  Includes at least:
+  - **Text2SqlRequest** / **Text2SqlResponse** — As above; text2sql unchanged.
+  - **GlossarySearchRequest** — Required: `management_key`, `query`.
+  - **GlossarySearchResponse** / **GlossarySearchResult** — Success shape for glossary (nested `result`).
   - **ErrorResponse** — Required field: `error` (string), a human-readable error message.
 
-**How Workato (or any automation provider) uses this:** Import the OpenAPI spec → the connector gets one operation, "text2sql" → configure the connection with your Solid management key (stored as a secret) → in a recipe or flow, send one HTTP POST with that key, the question, and semantic layer ID(s) in the body. No token handling.
+**How Workato (or any automation provider) uses this:** Import the OpenAPI spec → the connector gets the **text2sql** and **glossary** (and alias) operations → configure the connection with your Solid management key (stored as a secret) → in a recipe or flow, send one HTTP POST per operation: for text2sql, `management_key`, `question`, and `semantic_layer_ids`; for glossary, `management_key` and `query`. No token handling on the bridge.
 
 ### How to use it
 
-- **Workato:** Create a custom connector and import the OpenAPI spec (paste the contents of `openapi.yaml` or point to its URL). Configure the connection with your Solid **management key**. In the recipe, call the **text2sql** operation once: map the management key from the connection (or include it in the body as in the spec), and pass the question and semantic_layer_ids. No auth step.
-- **Power Platform / Copilot Studio:** Import the spec as a custom connector or use an HTTP action pointing at the bridge's text2sql endpoint. Store the management key in a flow variable or connection; send one POST with body `management_key`, `question`, and `semantic_layer_ids`. No prior auth call.
-- **API testers:** Import `openapi.yaml`, set the request body to the example shape above, and send one POST to the text2sql URL (with `code` if needed). No Bearer header.
+- **Workato:** Create a custom connector and import the OpenAPI spec (paste the contents of `openapi.yaml` or point to its URL). Configure the connection with your Solid **management key**. In the recipe, call **text2sql** or **glossary** / **glossary_search**: map the management key from the connection (or include it in the body as in the spec); for text2sql pass `question` and `semantic_layer_ids`; for glossary pass `query`. No auth step on the bridge.
+- **Power Platform / Copilot Studio:** Import the spec as a custom connector or use an HTTP action pointing at the bridge's **text2sql** or **glossary** URL. Store the management key in a flow variable or connection; send one POST with the appropriate body (`management_key` + text2sql fields, or `management_key` + `query` for glossary). No prior auth call for the bridge.
+- **API testers:** Import `openapi.yaml`, set the request body to the example shape for the operation you are testing, and send one POST to the **text2sql** or **glossary** URL (with `code` if needed). No Bearer header on the bridge.
 
 The **Azure bridge** that exposes MCP as REST is deployed and documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root `openapi.yaml` is the single source of truth for the **bridge URL and function key** when using REST/OpenAPI clients.
 
@@ -311,7 +349,7 @@ solid-mcp-poc/                  # Repo root
 ├── pyproject.toml
 ├── README.md
 ├── uv.lock
-├── openapi.yaml                # OpenAPI 3.0 single-call bridge (POST /text2sql); see "Using the OpenAPI spec" above
+├── openapi.yaml                # OpenAPI 3.0 single-call bridge (POST /text2sql, POST /glossary); see "Using the OpenAPI spec" above
 ├── scripts/e2e_openapi_test.py # E2E test: single POST with management_key in body to bridge; TEXT2SQL_URL + BRIDGE_FUNCTION_KEY for local/CI
 ├── solid-mcp-bridge/           # Azure Function App: REST-to-MCP bridge (see solid-mcp-bridge/README.md)
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
@@ -330,7 +368,7 @@ solid-mcp-poc/                  # Repo root
 
 No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
 
-**REST bridge (Workato, Copilot Studio, other agents):** The **solid-mcp-bridge/** directory is an Azure Function App that exposes Solid's MCP text2sql as a REST endpoint. Use it when the consumer only supports HTTP/OpenAPI (e.g. Workato custom connector, Copilot Studio HTTP action). The deployed URL and usage are documented in [solid-mcp-bridge/README.md](solid-mcp-bridge/README.md). The root **openapi.yaml** lists the bridge as the recommended server for the text2sql operation and includes the bridge function key in the spec (no env var needed for connector setups). See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc) for step-by-step usage.
+**REST bridge (Workato, Copilot Studio, other agents):** The **solid-mcp-bridge/** directory (when present in your checkout) is an Azure Function App that exposes Solid's MCP tools as REST endpoints, including **text2sql** and **glossary** search. Use it when the consumer only supports HTTP/OpenAPI (e.g. Workato custom connector, Copilot Studio HTTP action). The root **openapi.yaml** lists the bridge as the server for these operations and includes the bridge function key in the spec (no env var needed for connector setups). See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc) for step-by-step usage.
 
 
 ---
