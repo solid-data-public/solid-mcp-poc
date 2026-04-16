@@ -1,16 +1,25 @@
+import asyncio
 import os
-from typing import Type, Optional, Any
+from typing import Any, Optional, Type
+
+try:
+    import nest_asyncio
+except ImportError:
+    nest_asyncio = None
 
 import httpx
+from crewai.mcp import MCPClient
+from crewai.mcp.transports.http import HTTPTransport
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-# Auth exchange, then bridge calls (Bearer + JSON) for text2sql / glossary.
-AUTH_ENDPOINT_DEFAULT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
-BRIDGE_BASE = "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp"
-BRIDGE_FUNCTION_KEY_DEFAULT = "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
-TEXT2SQL_URL = f"{BRIDGE_BASE}/text2sql?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
-GLOSSARY_URL = f"{BRIDGE_BASE}/glossary?code={BRIDGE_FUNCTION_KEY_DEFAULT}"
+# Same defaults as soliddata_mcp_poc.config.Settings (crew flow)
+_DEFAULT_AUTH_ENDPOINT = "https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key"
+_DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
+
+# Long-running MCP tools (text2sql / glossary) need generous timeouts vs client defaults.
+_MCP_CONNECT_TIMEOUT = 60
+_MCP_TOOL_TIMEOUT = 120
 
 
 def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) -> str:
@@ -26,7 +35,7 @@ def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) 
             "SOLIDDATA_MANAGEMENT_KEY looks like a placeholder. "
             "Replace it in .env with your real SolidData management key."
         )
-    auth_endpoint = os.environ.get("AUTH_ENDPOINT", AUTH_ENDPOINT_DEFAULT)
+    auth_endpoint = os.environ.get("AUTH_ENDPOINT", _DEFAULT_AUTH_ENDPOINT)
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(
             auth_endpoint,
@@ -63,8 +72,45 @@ def _get_mcp_token(management_key: Optional[str] = None, timeout: float = 30.0) 
     return token
 
 
+def _run_mcp_tool_sync(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Connect to Solid MCP over HTTP (streamable), call one tool, disconnect."""
+    if nest_asyncio:
+        nest_asyncio.apply()
+
+    mcp_url = os.environ.get("MCP_SERVER_URL", _DEFAULT_MCP_SERVER_URL)
+
+    try:
+        token = _get_mcp_token()
+    except ValueError as e:
+        return str(e)
+
+    async def _call() -> str:
+        transport = HTTPTransport(
+            url=mcp_url,
+            headers={"Authorization": f"Bearer {token}"},
+            streamable=True,
+        )
+        client = MCPClient(
+            transport,
+            connect_timeout=_MCP_CONNECT_TIMEOUT,
+            execution_timeout=_MCP_TOOL_TIMEOUT,
+        )
+        try:
+            await client.connect()
+            result = await client.call_tool(tool_name, arguments)
+            return result if isinstance(result, str) else str(result)
+        finally:
+            await client.disconnect()
+
+    try:
+        return asyncio.run(_call())
+    except Exception as e:
+        return f"Error executing Solid MCP tool ({tool_name}): {str(e)}"
+
+
 class SolidText2SQLInput(BaseModel):
     """Input for the SolidText2SQL tool."""
+
     question: str = Field(
         ...,
         description="Natural-language question to convert into a SQL query.",
@@ -86,10 +132,10 @@ class SolidMcpTool(BaseTool):
     args_schema: Type[BaseModel] = SolidText2SQLInput
 
     env_vars: dict = {
-        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key (exchanged for JWT in step 1).",
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
         "SEMANTIC_LAYER_ID": "Optional. Fallback for semantic_layer_id if not passed.",
-        "AUTH_ENDPOINT": "Optional. Auth exchange URL (default from openapi.yaml).",
-        "TEXT2SQL_URL": "Optional. Bridge text2sql URL with ?code= (default BRIDGE_BASE/text2sql?code=...).",
+        "AUTH_ENDPOINT": "Optional. Defaults to production.",
+        "MCP_SERVER_URL": "Optional. Solid MCP HTTP URL. Defaults to production.",
     }
 
     def _run(
@@ -110,41 +156,12 @@ class SolidMcpTool(BaseTool):
         if not layer_id:
             return "Error: semantic_layer_id is missing. Pass it as an argument or set SEMANTIC_LAYER_ID."
 
-        try:
-            token = _get_mcp_token()
-        except ValueError as e:
-            return str(e)
-
-        url = os.environ.get("TEXT2SQL_URL", TEXT2SQL_URL)
-        payload = {"question": q, "semantic_layer_ids": [layer_id]}
-
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                resp = client.post(
-                    url,
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                )
-            if resp.status_code == 401:
-                return (
-                    "Error: Solid returned 401. Check that SOLIDDATA_MANAGEMENT_KEY "
-                    "is correct and not expired."
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict) and "message" in data:
-                return data["message"]
-            return str(data) if data else "Error: Empty response from bridge."
-        except httpx.HTTPStatusError as e:
-            return f"Error from bridge: {e.response.status_code} {e.response.text}"
-        except Exception as e:
-            return f"Error executing Solid MCP Tool: {str(e)}"
+        return _run_mcp_tool_sync(
+            "text2sql",
+            {"question": q, "semantic_layer_ids": [layer_id]},
+        )
 
 
-# Alias for code that imports the descriptive name
 SolidText2SQLTool = SolidMcpTool
 
 
@@ -158,7 +175,7 @@ class SolidGlossarySearchInput(BaseModel):
 
 
 class SolidGlossarySearchTool(BaseTool):
-    """CrewAI tool that calls SolidData MCP glossary_search via the same bridge + Bearer pattern as text2sql."""
+    """CrewAI tool that calls SolidData MCP glossary_search (same transport as SolidMcpTool)."""
 
     name: str = "solid_glossary_search"
     description: str = (
@@ -168,9 +185,9 @@ class SolidGlossarySearchTool(BaseTool):
     args_schema: Type[BaseModel] = SolidGlossarySearchInput
 
     env_vars: dict = {
-        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key (exchanged for JWT).",
-        "AUTH_ENDPOINT": "Optional. Auth exchange URL (default from openapi.yaml).",
-        "GLOSSARY_URL": "Optional. Bridge glossary URL with ?code= (default BRIDGE_BASE/glossary?code=...).",
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
+        "AUTH_ENDPOINT": "Optional. Defaults to production.",
+        "MCP_SERVER_URL": "Optional. Solid MCP HTTP URL. Defaults to production.",
     }
 
     def _run(self, query: str = "", **kwargs: Any) -> str:
@@ -178,48 +195,7 @@ class SolidGlossarySearchTool(BaseTool):
         if not q:
             return "Error: Input 'query' is missing."
 
-        try:
-            token = _get_mcp_token()
-        except ValueError as e:
-            return str(e)
-
-        url = os.environ.get("GLOSSARY_URL", GLOSSARY_URL)
-        payload = {"query": q}
-
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                resp = client.post(
-                    url,
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                )
-            if resp.status_code == 401:
-                return (
-                    "Error: Solid returned 401. Check that SOLIDDATA_MANAGEMENT_KEY "
-                    "is correct and not expired."
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict) and "result" in data:
-                inner = data["result"]
-                if isinstance(inner, dict):
-                    parts = []
-                    if inner.get("synthesized_answer"):
-                        parts.append(str(inner["synthesized_answer"]))
-                    if inner.get("answer_status"):
-                        parts.append(f"(status: {inner['answer_status']})")
-                    if inner.get("execution_error"):
-                        parts.append(f"Error: {inner['execution_error']}")
-                    return "\n".join(parts) if parts else str(inner)
-                return str(inner) if inner is not None else "Error: Empty glossary result."
-            return str(data) if data else "Error: Empty response from bridge."
-        except httpx.HTTPStatusError as e:
-            return f"Error from bridge: {e.response.status_code} {e.response.text}"
-        except Exception as e:
-            return f"Error executing Solid glossary tool: {str(e)}"
+        return _run_mcp_tool_sync("glossary_search", {"query": q})
 
 
 SolidMcpGlossaryTool = SolidGlossarySearchTool
