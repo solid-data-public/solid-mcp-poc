@@ -120,7 +120,7 @@ paths:
           required: false
           schema:
             type: string
-            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+            default: "jRC2j18d2ldwBjq3fSByRft0H40flKsVDs025Wc6pBzSAzFuacsgSQ=="
           description: |
             Azure Function host key. Pre-filled with the default value.
             Include this on every call to authenticate with the Azure Function host.
@@ -183,7 +183,7 @@ paths:
           required: false
           schema:
             type: string
-            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+            default: "jRC2j18d2ldwBjq3fSByRft0H40flKsVDs025Wc6pBzSAzFuacsgSQ=="
           description: |
             Azure Function host key. Pre-filled with the default value.
             Include this on every call to authenticate with the Azure Function host.
@@ -247,7 +247,7 @@ paths:
           required: false
           schema:
             type: string
-            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+            default: "jRC2j18d2ldwBjq3fSByRft0H40flKsVDs025Wc6pBzSAzFuacsgSQ=="
           description: |
             Azure Function host key. Pre-filled with the default value.
             Include this on every call to authenticate with the Azure Function host.

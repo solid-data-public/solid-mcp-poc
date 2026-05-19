@@ -260,14 +260,14 @@ The spec defines **one server** (the Azure bridge base URL) and **four POST oper
 
 On every call the bridge exchanges `management_key` for a short-lived JWT internally (tokens expire; renewal is automatic). Callers only store the Solid **management key**—never a Bearer token.
 
-The **`code` query parameter** is the Azure Function **host** key (Portal → Function App → App keys → `_master` or **default**). One host key works for all paths; function-specific keys only work on a single route and return **401** on others. Defaults are pre-filled in `openapi.yaml` per path; override with `BRIDGE_FUNCTION_KEY` when running local E2E tests (see `scripts/e2e_openapi_test.py`).
+The **`code` query parameter** is the Azure Function **host** key (Portal → Function App → App keys → `_master` or **default**). The same host key applies to every path (pre-filled in `openapi.yaml`). Function-specific keys only work on one route and return **401** on others. For local E2E, set `BRIDGE_FUNCTION_KEY` in `.env` or let `scripts/e2e_openapi_test.py` read the default from `openapi.yaml` via `scripts/bridge_openapi.py`.
 
 ### Flow for each request
 
 For **every** bridge operation:
 
 1. Send **one POST** to `{bridge_base}/{path}` (e.g. `…/api/mcp/text2sql`) with JSON containing **`management_key`** and the fields required for that tool.
-2. Optionally append **`?code=<host-key>`** if your connector does not use the spec default.
+2. Include the **`code`** query parameter (importing `openapi.yaml` into Workato/Copilot Studio applies the spec default automatically).
 
 No auth endpoint call and no `Authorization: Bearer` header to the bridge.
 
@@ -331,7 +331,7 @@ This section walks through [openapi.yaml](openapi.yaml) so you can use it in Wor
 
 - **`openapi` and `info`** — OpenAPI **3.0.3**, title **Solid MCP Bridge**, version **2.0.0**. `info.description` lists all four supported tools and the single-call model (`management_key` in body; bridge handles JWT). **No two-step auth** for bridge callers.
 - **`servers`** — Single bridge base (e.g. `https://…azurewebsites.net/api/mcp`). Paths are relative: `…/text2sql`, `…/glossary_search`, `…/specific_asset_information_tool`, `…/semantic_model_qa`.
-- **`paths`** — Each operation is **POST only**, `security: []`, optional **`code`** query param (host key with path-specific default in spec), required **`application/json`** body with **`management_key`**, and shared error responses **400**, **401**, **405**, **502**.
+- **`paths`** — Each operation is **POST only**, `security: []`, optional **`code`** query param (same host key default on every path), required **`application/json`** body with **`management_key`**, and shared error responses **400**, **401**, **405**, **502**.
 - **`components/schemas`** — Request/response types per tool (`Text2SqlRequest` → `message`; others → `result`). **ErrorResponse** has required `error` string.
 
 **How Workato (or similar) uses this:** Import `openapi.yaml` → four operations appear → store **management_key** as a connection secret → one POST per action with `management_key` plus the fields for that operation. No token handling on the bridge.
@@ -340,9 +340,9 @@ This section walks through [openapi.yaml](openapi.yaml) so you can use it in Wor
 
 - **Workato:** Import the spec; map **management_key** from the connection into each action body; pass tool-specific fields (`question` / `semantic_layer_ids`, `query`, `asset_name`, `semantic_model_id`, etc.).
 - **Power Platform / Copilot Studio:** Custom connector or HTTP action per path; same single POST body shape.
-- **API testers / CI:** Import `openapi.yaml` or run `python scripts/e2e_openapi_test.py` (defaults to **text2sql**; set `BRIDGE_TOOL=glossary_search` etc. to exercise other paths). See script help for env vars.
+- **API testers / CI:** Import `openapi.yaml` or run `python scripts/e2e_openapi_test.py` (defaults to **text2sql**; set `BRIDGE_TOOL=glossary_search` etc.). Bridge URL and `code` resolve from `.env` or from `openapi.yaml` (see `scripts/bridge_openapi.py`).
 
-The root **`openapi.yaml`** is the source of truth for bridge URLs, request/response shapes, and default `code` values for REST/OpenAPI clients.
+The root **`openapi.yaml`** is the source of truth for bridge URLs, request/response shapes, and the Azure host `code` default for REST/OpenAPI clients.
 
 ---
 
@@ -355,7 +355,9 @@ solid-mcp-poc/                  # Repo root
 ├── README.md
 ├── uv.lock
 ├── openapi.yaml                # OpenAPI 3.0 Azure bridge (4 tools, single-call auth); see "Using the OpenAPI spec" above
-├── scripts/e2e_openapi_test.py # E2E: single POST per bridge tool; BRIDGE_TOOL, BRIDGE_BASE_URL, BRIDGE_FUNCTION_KEY
+├── scripts/
+│   ├── bridge_openapi.py       # Read bridge base URL / code default from openapi.yaml
+│   └── e2e_openapi_test.py     # E2E: single POST per bridge tool
 ├── solid_mcp_tool/             # Standalone CrewAI custom tool (publish separately; not used by this demo’s crew)
 │   ├── __init__.py
 │   ├── tool.py                 # Self-contained: auth + MCP call + env_vars for AMP injection
@@ -372,7 +374,7 @@ solid-mcp-poc/                  # Repo root
 
 No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
 
-**REST bridge (Workato, Copilot Studio, other agents):** An Azure Function App exposes Solid MCP tools as REST (**text2sql**, **glossary_search**, **specific_asset_information_tool**, **semantic_model_qa**). Use it when the consumer only supports HTTP/OpenAPI. The root **openapi.yaml** documents the bridge base URL, paths, bodies, and default host `code` values. See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc).
+**REST bridge (Workato, Copilot Studio, other agents):** An Azure Function App exposes Solid MCP tools as REST (**text2sql**, **glossary_search**, **specific_asset_information_tool**, **semantic_model_qa**). Use it when the consumer only supports HTTP/OpenAPI. The root **openapi.yaml** documents the bridge base URL, paths, bodies, and the shared host `code` default. See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc).
 
 
 ---

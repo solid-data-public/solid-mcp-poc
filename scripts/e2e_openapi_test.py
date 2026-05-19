@@ -15,8 +15,8 @@ Environment (see .env.example):
   SOLIDDATA_MANAGEMENT_KEY  — required
   BRIDGE_TOOL               — text2sql (default), glossary_search,
                               specific_asset_information_tool, semantic_model_qa
-  BRIDGE_BASE_URL           — override bridge base (default matches openapi.yaml servers)
-  BRIDGE_FUNCTION_KEY       — optional Azure host key (?code=); spec defaults work when unset
+  BRIDGE_BASE_URL           — optional; defaults to servers.url in openapi.yaml
+  BRIDGE_FUNCTION_KEY       — optional; defaults to parameters.code in openapi.yaml
   SEMANTIC_LAYER_ID         — for text2sql
   SEMANTIC_MODEL_ID         — for semantic_model_qa
   E2E_TIMEOUT, E2E_RETRY_ATTEMPTS — retries for cold starts / 503
@@ -37,16 +37,21 @@ try:
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     load_dotenv(os.path.join(_root, ".env"))
 except ImportError:
-    pass
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
+from scripts.bridge_openapi import (  # noqa: E402
+    append_bridge_code,
+    resolve_bridge_base_url,
+    resolve_bridge_function_key,
+    url_without_query,
+)
 
 DEFAULT_SEMANTIC_LAYER_ID = "998b655a-75eb-4873-bb1e-3ddd23164065"
 DEFAULT_SEMANTIC_MODEL_ID = "00000000-0000-0000-0000-000000000000"
 DEFAULT_ASSET_NAME = "SUN_SPECTRA.PUBLIC.ORDERS"
-
-BRIDGE_BASE_URL = os.environ.get(
-    "BRIDGE_BASE_URL",
-    "https://solid-mcp-bridge-efeqgrayfnhvbsf0.eastus2-01.azurewebsites.net/api/mcp",
-).rstrip("/")
 
 BRIDGE_TOOLS: dict[str, dict[str, Any]] = {
     "text2sql": {
@@ -72,7 +77,6 @@ BRIDGE_TOOLS: dict[str, dict[str, Any]] = {
 }
 
 TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "120"))
-BRIDGE_FUNCTION_KEY = os.environ.get("BRIDGE_FUNCTION_KEY", "").strip()
 E2E_RETRY_ATTEMPTS = int(os.environ.get("E2E_RETRY_ATTEMPTS", "3"))
 E2E_RETRY_BACKOFF = [5, 15, 30]
 
@@ -109,11 +113,10 @@ def _build_payload(tool: str, management_key: str, question: str) -> dict[str, A
 
 
 def _bridge_url(tool: str) -> str:
-    meta = BRIDGE_TOOLS[tool]
-    url = f"{BRIDGE_BASE_URL}{meta['path']}"
-    if BRIDGE_FUNCTION_KEY:
-        url = f"{url}{'&' if '?' in url else '?'}code={BRIDGE_FUNCTION_KEY}"
-    return url
+    base = resolve_bridge_base_url()
+    path = BRIDGE_TOOLS[tool]["path"]
+    function_key = resolve_bridge_function_key()
+    return append_bridge_code(f"{base}{path}", function_key)
 
 
 def _post_with_retries(client: httpx.Client, url: str, payload: dict[str, Any]) -> httpx.Response | None:
@@ -126,7 +129,7 @@ def _post_with_retries(client: httpx.Client, url: str, payload: dict[str, Any]) 
                 return resp
             if attempt < E2E_RETRY_ATTEMPTS - 1:
                 delay = E2E_RETRY_BACKOFF[min(attempt, len(E2E_RETRY_BACKOFF) - 1)]
-                print(f"{url} returned 503, retrying in {delay}s...", file=sys.stderr)
+                print(f"{url_without_query(url)} returned 503, retrying in {delay}s...", file=sys.stderr)
                 time.sleep(delay)
         except httpx.ReadTimeout:
             if attempt < E2E_RETRY_ATTEMPTS - 1:
@@ -186,7 +189,7 @@ def main() -> int:
         payload = _build_payload(tool, key, question)
 
     url = _bridge_url(tool)
-    print(f"Calling {tool} (single-call): {url}")
+    print(f"Calling {tool} (single-call): {url_without_query(url)}")
     print(f"Payload keys: {list(payload.keys())}")
 
     with httpx.Client(timeout=TIMEOUT) as client:
@@ -200,7 +203,8 @@ def main() -> int:
             print("404 — check BRIDGE_BASE_URL and that the bridge is deployed.", file=sys.stderr)
         elif resp.status_code == 401:
             print(
-                "401 — check SOLIDDATA_MANAGEMENT_KEY or BRIDGE_FUNCTION_KEY (use host key, not function-only key).",
+                "401 — check SOLIDDATA_MANAGEMENT_KEY or BRIDGE_FUNCTION_KEY "
+                "(host key; must match openapi.yaml).",
                 file=sys.stderr,
             )
         else:
