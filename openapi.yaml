@@ -2,19 +2,28 @@ openapi: 3.0.3
 info:
   title: Solid MCP Bridge
   description: |
-    Single-call bridge for Solid's MCP text2sql tool.
+    Single-call bridge for Solid's MCP tools.
+
+    **Supported tools**
+    - `text2sql` — convert a natural-language question into SQL via `/text2sql`.
+    - `glossary_search` — search the internal glossary via `/glossary_search`.
+    - `specific_asset_information_tool` — get metadata about a named table or dashboard via `/specific_asset_information_tool`.
+    - `semantic_model_qa` — answer questions about a semantic model via `/semantic_model_qa`.
 
     **How it works**
-    - POST `management_key`, `question`, and `semantic_layer_ids` in the request body.
+    - POST your Solid `management_key` plus the tool-specific fields in the request body.
     - The bridge exchanges the management key for a JWT internally on every call
       (JWT tokens expire; the bridge handles renewal automatically).
-    - Returns the generated SQL and explanation in the `message` field.
+    - Returns the MCP result in the response (`message` for text2sql, `result` for other tools).
 
     **No two-step auth needed.** Callers never need to manage Bearer tokens.
     The `management_key` is the only credential required.
 
     **Azure Function key** — include the `code` query parameter (pre-filled below)
-    to authenticate with the Azure Function host.
+    to authenticate with the Azure Function host. Use the Function App **host key**
+    (Azure Portal → your Function App → App keys → `_master` or **default** host key).
+    One host key works for every tool path; function-specific keys only work for a
+    single route and will return 401 on other paths.
   version: 2.0.0
   contact:
     name: Solid
@@ -39,7 +48,7 @@ paths:
           required: false
           schema:
             type: string
-            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+            default: "jRC2j18d2ldwBjq3fSByRft0H40flKsVDs025Wc6pBzSAzFuacsgSQ=="
           description: |
             Azure Function host key. Pre-filled with the default value.
             Include this on every call to authenticate with the Azure Function host.
@@ -96,7 +105,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /glossary:
+  /glossary_search:
     post:
       summary: Search glossary terms
       description: |
@@ -159,12 +168,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /glossary_search:
+  /specific_asset_information_tool:
     post:
-      summary: Search glossary terms (alias)
+      summary: Get information about a specific asset
       description: |
-        Alias route for `/glossary` with identical behavior.
-      operationId: glossarySearchAlias
+        Send a question about a specific named table or dashboard (one asset at a time).
+        Include your Solid `management_key` in the body — the bridge handles
+        authentication with Solid automatically.
+      operationId: specificAssetInformation
       security: []
       parameters:
         - name: code
@@ -181,20 +192,91 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GlossarySearchRequest'
+              $ref: '#/components/schemas/SpecificAssetInformationRequest'
             examples:
-              basic:
-                summary: Glossary query
+              columnLookup:
+                summary: Column lookup on a table
                 value:
                   management_key: "<your-solid-management-key>"
-                  query: "What is LLS?"
+                  question: "What column includes information about when an order was delivered?"
+                  asset_name: "SUN_SPECTRA.PUBLIC.ORDERS"
       responses:
         '200':
-          description: Success. Returns the MCP glossary_search result.
+          description: Success. Returns asset metadata and natural-language answer.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GlossarySearchResponse'
+                $ref: '#/components/schemas/SpecificAssetInformationResponse'
+        '400':
+          description: Bad request — missing or invalid body fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Auth failed — management_key is missing, invalid, or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed. Use POST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: MCP call failed (upstream Solid server error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /semantic_model_qa:
+    post:
+      summary: Answer questions about a semantic model
+      description: |
+        Send a natural-language question about a semantic model's metadata.
+        Include your Solid `management_key` in the body — the bridge handles
+        authentication with Solid automatically.
+      operationId: semanticModelQa
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "DnqGmyuh1gnv_ow4xE5O7sPBO80MXZeUTosP_rIFxIFyAzFu_Y3Xpg=="
+          description: |
+            Azure Function host key. Pre-filled with the default value.
+            Include this on every call to authenticate with the Azure Function host.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SemanticModelQaRequest'
+            examples:
+              modelCoverage:
+                summary: Understand model coverage
+                value:
+                  management_key: "<your-solid-management-key>"
+                  question: "What does this model cover?"
+                  semantic_model_id: "00000000-0000-0000-0000-000000000000"
+              tableLookup:
+                summary: Find a table in the model
+                value:
+                  management_key: "<your-solid-management-key>"
+                  question: "What table in the model contains information about customer support tickets?"
+                  semantic_model_id: "00000000-0000-0000-0000-000000000000"
+      responses:
+        '200':
+          description: Success. Returns natural-language answer about the semantic model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SemanticModelQaResponse'
         '400':
           description: Bad request — missing or invalid body fields.
           content:
@@ -266,6 +348,54 @@ components:
           description: Search query for terms/phrases in the glossary.
           example: "What is LLS?"
 
+    SpecificAssetInformationRequest:
+      type: object
+      required:
+        - management_key
+        - question
+        - asset_name
+      properties:
+        management_key:
+          type: string
+          description: |
+            Solid management key. The bridge uses this to obtain a
+            short-lived JWT on every call — you never handle tokens directly.
+          example: "<your-solid-management-key>"
+        question:
+          type: string
+          description: Question about the specific named table or dashboard.
+          example: "What column includes information about when an order was delivered?"
+        asset_name:
+          type: string
+          description: Exact name of the table or dashboard (e.g. database.schema.table).
+          example: "SUN_SPECTRA.PUBLIC.ORDERS"
+        asset_type:
+          type: string
+          description: Optional asset type hint (e.g. table, dashboard).
+
+    SemanticModelQaRequest:
+      type: object
+      required:
+        - management_key
+        - semantic_model_id
+        - question
+      properties:
+        management_key:
+          type: string
+          description: |
+            Solid management key. The bridge uses this to obtain a
+            short-lived JWT on every call — you never handle tokens directly.
+          example: "<your-solid-management-key>"
+        semantic_model_id:
+          type: string
+          format: uuid
+          description: UUID of the semantic model.
+          example: "00000000-0000-0000-0000-000000000000"
+        question:
+          type: string
+          description: Natural-language question about the semantic model metadata.
+          example: "What does this model cover?"
+
     Text2SqlResponse:
       type: object
       required:
@@ -299,6 +429,28 @@ components:
           type: string
           nullable: true
           description: Error text when glossary execution fails.
+
+    SpecificAssetInformationResponse:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          type: object
+          additionalProperties: true
+          description: |
+            MCP payload including response_text, asset_found, asset_name,
+            and optional structured column or lineage data.
+
+    SemanticModelQaResponse:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          type: object
+          additionalProperties: true
+          description: MCP payload including natural-language answer about the semantic model.
 
     ErrorResponse:
       type: object
