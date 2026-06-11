@@ -1,5 +1,6 @@
 """CrewAI crew that uses the SolidData MCP server (text2sql, glossary_search) and Snowflake connector."""
 
+import os
 from typing import Optional
 
 from crewai import Agent, Crew, LLM, Process, Task
@@ -9,13 +10,12 @@ from soliddata_mcp_poc.snowflake_connector_tool import SnowflakeConnectorTool
 
 
 def build_crew(
-    mcp_token: str,
     mcp_server_url: str,
     user_question: str,
     *,
     gemini_api_key: str,
     semantic_layer_id: str,
-    model: str = "gemini/gemini-2.0-flash",
+    model: str = "gemini/gemini-2.0-flash-lite",
     # Optional Snowflake (connector with username/password only)
     snowflake_account: Optional[str] = None,
     snowflake_user: Optional[str] = None,
@@ -42,7 +42,7 @@ def build_crew(
 
     mcp = MCPServerHTTP(
         url=mcp_server_url,
-        headers={"Authorization": f"Bearer {mcp_token}"},
+        headers={"x-solid-management-key": os.environ["SOLIDDATA_MANAGEMENT_KEY"]},
         streamable=True,
         cache_tools_list=True,
     )

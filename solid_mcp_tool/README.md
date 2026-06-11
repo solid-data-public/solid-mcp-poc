@@ -1,6 +1,6 @@
 # Solid MCP Tool (CrewAI Custom Tool)
 
-CrewAI **`BaseTool`** implementations that call SolidData **directly over MCP** (same pattern as the repo demo in `soliddata_mcp_poc`): exchange the management key for a JWT, then use CrewAI’s **`MCPClient`** with **`HTTPTransport`** to Solid’s **`MCP_SERVER_URL`** and invoke MCP tools. **They do not use the Azure REST-to-MCP bridge** (that bridge is for OpenAPI / REST-only integrations only).
+CrewAI **`BaseTool`** implementations that call SolidData **directly over MCP** (same pattern as the repo demo in `soliddata_mcp_poc`): pass `SOLIDDATA_MANAGEMENT_KEY` as the **`x-solid-management-key`** header via CrewAI's **`MCPClient`** with **`HTTPTransport`** to Solid's **`MCP_SERVER_URL`**. **They do not use the Azure REST-to-MCP bridge** (that bridge is for OpenAPI / REST-only integrations only).
 
 Use this package in **CrewAI Enterprise (AMP)** or other crews when you want named tools (**`solid_text2sql`**, **`solid_glossary_search`**) instead of attaching **`MCPServerHTTP`** to an agent.
 
@@ -11,14 +11,13 @@ Use this package in **CrewAI Enterprise (AMP)** or other crews when you want nam
 
 1. Agent sends `{question}` (and optionally `semantic_layer_id` to override the env var).
 2. Tool reads `SEMANTIC_LAYER_ID` from the environment (or uses the override).
-3. Tool exchanges `SOLIDDATA_MANAGEMENT_KEY` for a JWT (`httpx` to `AUTH_ENDPOINT`).
-4. Tool opens an MCP session to `MCP_SERVER_URL` with `Authorization: Bearer …` and calls the **`text2sql`** tool with `question` and `semantic_layer_ids`.
-5. Returns the MCP tool result (text).
+3. Tool opens an MCP session to `MCP_SERVER_URL` with `x-solid-management-key` and calls the **`text2sql`** tool with `question` and `semantic_layer_ids`.
+4. Returns the MCP tool result (text).
 
 ## How it works (glossary — `SolidGlossarySearchTool`)
 
 1. Agent sends `{query}`.
-2. Same auth as text2sql.
+2. Same header auth as text2sql.
 3. MCP session calls **`glossary_search`** with `{"query": "..."}`.
 4. Returns the MCP tool result (text).
 
@@ -28,15 +27,13 @@ Set these in `.env` (local) or in **CrewAI Enterprise tool config** (AMP). The t
 
 | Variable | Required | Description |
 |---|---|---|
-| `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access. |
+| `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access (passed as `x-solid-management-key` header). |
 | `SEMANTIC_LAYER_ID` | Yes for **text2sql** | UUID of the semantic layer (MCP `semantic_layer_ids`). Not used by **glossary**. |
-| `AUTH_ENDPOINT` | No | Override auth exchange URL. Default: production. |
 | `MCP_SERVER_URL` | No | Solid MCP HTTP URL. Default: production. |
 
 ## Dependencies
 
 - `crewai` (with MCP + `EnvVar` support)
-- `httpx`
 - `pydantic`
 - `mcp` (pulled in with CrewAI MCP support)
 - `nest_asyncio` (fixes "event loop already running" in AMP)
@@ -61,7 +58,7 @@ Do this in a **normal terminal**, in a new folder.
 4. **Update `pyproject.toml`**
    - Set `name`, `version`, `description`.
    - **Increment `version`** for every publish.
-   - Ensure dependencies include: `crewai`, `httpx`, `pydantic`, `nest-asyncio`.
+   - Ensure dependencies include: `crewai`, `pydantic`, `nest-asyncio`.
 
 5. **Commit and publish**
    ```bash
@@ -73,4 +70,4 @@ Do this in a **normal terminal**, in a new folder.
 
 ## Using in CrewAI Enterprise (AMP)
 
-After publishing, add one or both tools to your crew in Crew Studio. For **text2sql**, set `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID`. For **glossary_search**, set `SOLIDDATA_MANAGEMENT_KEY` (and `MCP_SERVER_URL` / `AUTH_ENDPOINT` if not using defaults). AMP reads the `env_vars` declared on each tool class and injects them into `os.environ` before the tool runs.
+After publishing, add one or both tools to your crew in Crew Studio. For **text2sql**, set `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID`. For **glossary_search**, set `SOLIDDATA_MANAGEMENT_KEY` (and `MCP_SERVER_URL` if not using defaults). AMP reads the `env_vars` declared on each tool class and injects them into `os.environ` before the tool runs.

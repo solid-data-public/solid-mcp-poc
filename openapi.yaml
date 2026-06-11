@@ -12,8 +12,8 @@ info:
 
     **How it works**
     - POST your Solid `management_key` plus the tool-specific fields in the request body.
-    - The bridge exchanges the management key for a JWT internally on every call
-      (JWT tokens expire; the bridge handles renewal automatically).
+    - The bridge forwards your management key directly to Solid's MCP server as a header.
+      No separate auth exchange occurs.
     - Returns the MCP result in the response (`message` for text2sql, `result` for other tools).
 
     **No two-step auth needed.** Callers never need to manage Bearer tokens.

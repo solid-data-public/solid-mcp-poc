@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+# DEPRECATED: This script tests the Azure bridge (REST adapter for low-code consumers).
+# For direct MCP testing, use the curl command in AGENT_MIGRATION_INSTRUCTIONS.md.
 """
 Validate the OpenAPI contract via a single REST call (what Workato would do).
 
 One POST per bridge operation with management_key and tool fields in the body.
-No separate auth step and no Bearer header—the bridge exchanges the key for a JWT.
+No separate auth step and no Bearer header—the bridge forwards the key as x-solid-management-key.
 No CrewAI or MCP client.
 
 Usage:

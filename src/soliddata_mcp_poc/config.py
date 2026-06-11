@@ -14,13 +14,8 @@ class Settings(BaseSettings):
 
     # ── Auth ─────────────────────────────────────────────
     soliddata_management_key: str = Field(
-        description="SolidData management key for MCP auth.",
+        description="SolidData management key for MCP auth (passed as x-solid-management-key header).",
         alias="SOLIDDATA_MANAGEMENT_KEY",
-    )
-    auth_endpoint: str = Field(
-        default="https://backend.production.soliddata.io/api/v1/auth/exchange_user_access_key",
-        description="Endpoint to exchange management key for a bearer token.",
-        alias="AUTH_ENDPOINT",
     )
 
     # ── MCP ──────────────────────────────────────────────
@@ -41,8 +36,8 @@ class Settings(BaseSettings):
         alias="GEMINI_API_KEY",
     )
     model: str = Field(
-        default="gemini/gemini-2.0-flash",
-        description="LLM model name (e.g. gemini/gemini-2.0-flash).",
+        default="gemini/gemini-2.0-flash-lite",
+        description="LLM model name (e.g. gemini/gemini-2.0-flash-lite).",
         alias="MODEL",
     )
 

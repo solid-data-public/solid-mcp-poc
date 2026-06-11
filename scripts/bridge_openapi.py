@@ -1,3 +1,5 @@
+# DEPRECATED: This script tests the Azure bridge (REST adapter for low-code consumers).
+# For direct MCP testing, use the curl command in AGENT_MIGRATION_INSTRUCTIONS.md.
 """Azure bridge settings from repo openapi.yaml (single source of truth for E2E)."""
 
 from __future__ import annotations
