@@ -16,7 +16,7 @@ info:
       No separate auth exchange occurs.
     - Returns the MCP result in the response (`message` for text2sql, `result` for other tools).
 
-    **No two-step auth needed.** Callers never need to manage Bearer tokens.
+    **No two-step auth needed.** Callers never need to manage tokens.
     The `management_key` is the only credential required.
 
     **Azure Function key** — include the `code` query parameter (pre-filled below)
@@ -315,8 +315,9 @@ components:
           type: string
           description: |
             Solid management key. Store this as a fixed connection credential
-            in Workato / Copilot Studio. The bridge uses this to obtain a
-            short-lived JWT on every call — you never handle tokens directly.
+            in Workato / Copilot Studio. The bridge forwards this directly to
+            Solid's MCP server as the `x-solid-management-key` header. No token
+            exchange occurs.
           example: "<your-solid-management-key>"
         question:
           type: string
@@ -340,8 +341,9 @@ components:
         management_key:
           type: string
           description: |
-            Solid management key. The bridge uses this to obtain a
-            short-lived JWT on every call — you never handle tokens directly.
+            Solid management key. The bridge forwards this directly to Solid's
+            MCP server as the `x-solid-management-key` header. No token
+            exchange occurs.
           example: "<your-solid-management-key>"
         query:
           type: string
@@ -358,8 +360,9 @@ components:
         management_key:
           type: string
           description: |
-            Solid management key. The bridge uses this to obtain a
-            short-lived JWT on every call — you never handle tokens directly.
+            Solid management key. The bridge forwards this directly to Solid's
+            MCP server as the `x-solid-management-key` header. No token
+            exchange occurs.
           example: "<your-solid-management-key>"
         question:
           type: string
@@ -383,8 +386,9 @@ components:
         management_key:
           type: string
           description: |
-            Solid management key. The bridge uses this to obtain a
-            short-lived JWT on every call — you never handle tokens directly.
+            Solid management key. The bridge forwards this directly to Solid's
+            MCP server as the `x-solid-management-key` header. No token
+            exchange occurs.
           example: "<your-solid-management-key>"
         semantic_model_id:
           type: string
