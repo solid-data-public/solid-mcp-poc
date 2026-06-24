@@ -167,27 +167,46 @@ soliddata_mcp_poc "How many users signed up last month?"
 
 **CrewAI + Solid (this repo):** pass `SOLIDDATA_MANAGEMENT_KEY` as the **`x-solid-management-key`** header and connect **directly** to Solid’s MCP HTTP endpoint. Part 1 does that with **`MCPServerHTTP`** on an agent; **`solid_mcp_tool`** does the same with **`MCPClient`** + **`HTTPTransport`** inside **`BaseTool`** implementations — **no Azure REST-to-MCP bridge**. The bridge is only for REST/OpenAPI consumers ([Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc)).
 
-The **`solid_mcp_tool`** folder is optional **publishable** tools for **CrewAI Enterprise (AMP)** or other crews: use them when you want **`solid_text2sql`** / **`solid_glossary_search`** as explicit tools instead of wiring `MCPServerHTTP` on an agent.
+The **`solid_mcp_tool`** folder is optional **publishable** tools for **CrewAI Enterprise (AMP)** or other crews: use them when you want explicit **`solid_*`** tools instead of wiring `MCPServerHTTP` on an agent.
 
 ### 2.1 What’s in `solid_mcp_tool/`
 
-- **`tool.py`** — Self-contained: **direct** Solid MCP (`MCPClient` / `HTTPTransport` with `x-solid-management-key`, same idea as Part 1). Defines **`SolidMcpTool`** (text2sql) and **`SolidGlossarySearchTool`** (glossary_search). Declares `env_vars` so CrewAI Enterprise (AMP) injects secrets at runtime.
+- **`tool.py`** — Self-contained: **direct** streamable HTTP MCP (`MCPClient` / `HTTPTransport` with `x-solid-management-key`, same idea as Part 1). Defines four **`BaseTool`** classes — one per Solid MCP tool. Declares `env_vars` so CrewAI Enterprise (AMP) injects secrets at runtime.
 - **`README.md`** — Usage, env vars, publish instructions, and AMP deployment notes.
+
+| CrewAI tool | Class | MCP tool |
+|-------------|-------|----------|
+| `solid_text2sql` | `SolidMcpTool` | `text2sql` |
+| `solid_glossary_search` | `SolidGlossarySearchTool` | `glossary_search` |
+| `solid_specific_asset_information` | `SolidSpecificAssetInformationTool` | `specific_asset_information_tool` |
+| `solid_semantic_model_qa` | `SolidSemanticModelQATool` | `semantic_model_qa` |
 
 ### 2.2 How it works (tool flow — direct MCP `BaseTool`s)
 
-1. Agent sends arguments to **solid_text2sql** (`question`, optional `semantic_layer_id`) or **solid_glossary_search** (`query` only).
-2. Text2sql: tool reads `SEMANTIC_LAYER_ID` from the environment when not passed. Glossary: MCP tool **`glossary_search`** with **`query`** only.
-3. Tool opens a short-lived MCP session to **`MCP_SERVER_URL`** with **`x-solid-management-key`**, calls **`text2sql`** or **`glossary_search`**, then disconnects.
+1. Agent sends arguments to the appropriate **`solid_*`** tool (see table below).
+2. Tool reads env fallbacks when args are omitted (`SEMANTIC_LAYER_ID`, `SEMANTIC_MODEL_ID`, `ASSET_NAME`, etc.).
+3. Tool opens a short-lived MCP session to **`MCP_SERVER_URL`** with **`x-solid-management-key`**, calls the matching MCP tool, then disconnects.
 4. Returns the tool result text from the MCP server.
+
+**CrewAI tool selection** (direct MCP — not the bridge):
+
+| User intent | CrewAI tool | MCP tool | MCP arguments |
+|-------------|-------------|----------|---------------|
+| Generate SQL from a data question | `solid_text2sql` | `text2sql` | `question`, `semantic_layer_ids` |
+| Look up a term or acronym | `solid_glossary_search` | `glossary_search` | `query` |
+| Ask about a specific table or dashboard | `solid_specific_asset_information` | `specific_asset_information_tool` | `question`, `asset_name`, optional `asset_type` |
+| Ask about semantic model metadata | `solid_semantic_model_qa` | `semantic_model_qa` | `question`, `semantic_model_id` |
 
 ### 2.3 Environment variables (tool)
 
 | Variable | Required | Description |
 |---|---|---|
-| `SOLIDDATA_MANAGEMENT_KEY` | Yes | SolidData management key with MCP access (passed as `x-solid-management-key` header). |
-| `SEMANTIC_LAYER_ID` | Yes for text2sql | UUID of the semantic layer (passed to MCP as `semantic_layer_ids`). Not required for glossary. |
+| `SOLIDDATA_MANAGEMENT_KEY` | Yes (all tools) | SolidData management key with MCP access (passed as `x-solid-management-key` header). |
 | `MCP_SERVER_URL` | No | Solid MCP HTTP URL. Default: production (same as Part 1 `MCP_SERVER_URL`). |
+| `SEMANTIC_LAYER_ID` | Yes for text2sql | UUID of the semantic layer (passed to MCP as `semantic_layer_ids`). |
+| `SEMANTIC_MODEL_ID` | Yes for semantic_model_qa (unless passed as arg) | UUID of the semantic model. |
+| `ASSET_NAME` | Yes for specific_asset_information (unless passed as arg) | Default table or dashboard name. |
+| `ASSET_TYPE` | No | Optional asset type hint (e.g. `table`, `dashboard`). |
 
 In **CrewAI Enterprise**, set these in the **tool configuration** in Crew Studio. The tool class declares them via `env_vars` so AMP injects them into `os.environ` before `_run` executes.
 
@@ -216,12 +235,12 @@ Do these steps in a **normal terminal**, in a new directory.
 5. **Commit and publish**
    ```bash
    git add .
-   git commit -m "Solid MCP text2sql tool"
+   git commit -m "Solid MCP tools (text2sql, glossary, asset info, semantic model QA)"
    crewai tool publish
    ```
    Use `crewai tool publish --public` for a public tool.
 
-After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` and `SEMANTIC_LAYER_ID` in the project or in CrewAI AMP tool config.
+After publishing, install with `crewai tool install <tool-name>`. Set `SOLIDDATA_MANAGEMENT_KEY` in the project or in CrewAI AMP tool config, plus tool-specific vars (`SEMANTIC_LAYER_ID`, `SEMANTIC_MODEL_ID`, `ASSET_NAME`, etc.) as needed.
 
 ---
 
@@ -308,11 +327,36 @@ Optional: `"asset_type": "table"` (or `dashboard`).
 ```
 
 **Direct MCP (CrewAI / Inspector — not the bridge)**  
-MCP tool calls use tool arguments only—**no `management_key` in the tool payload** (auth is via the `x-solid-management-key` header). Example for glossary:
+MCP tool calls use tool arguments only—**no `management_key` in the tool payload** (auth is via the `x-solid-management-key` header). Examples:
 
+**text2sql**
+```json
+{
+  "question": "How many users signed up last month?",
+  "semantic_layer_ids": ["00000000-0000-0000-0000-000000000000"]
+}
+```
+
+**glossary_search**
 ```json
 {
   "query": "What does LLS mean?"
+}
+```
+
+**specific_asset_information_tool**
+```json
+{
+  "question": "What column includes information about when an order was delivered?",
+  "asset_name": "SUN_SPECTRA.PUBLIC.ORDERS"
+}
+```
+
+**semantic_model_qa**
+```json
+{
+  "question": "What does this model cover?",
+  "semantic_model_id": "00000000-0000-0000-0000-000000000000"
 }
 ```
 

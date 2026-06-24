@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 # Same defaults as soliddata_mcp_poc.config.Settings (crew flow)
 _DEFAULT_MCP_SERVER_URL = "https://mcp.production.soliddata.io/mcp"
 
-# Long-running MCP tools (text2sql / glossary) need generous timeouts vs client defaults.
+# Long-running MCP tools need generous timeouts vs client defaults.
 _MCP_CONNECT_TIMEOUT = 60
 _MCP_TOOL_TIMEOUT = 120
 
@@ -96,7 +96,7 @@ class SolidMcpTool(BaseTool):
         layer_id = (
             (semantic_layer_id or "").strip()
             or (kwargs.get("semantic_layer_id") or "").strip()
-            or (os.environ.get("SEMANTIC_LAYER_ID") or os.environ.get("SEMANTIC_MODEL_ID") or "").strip()
+            or (os.environ.get("SEMANTIC_LAYER_ID") or "").strip()
         )
         if not layer_id:
             return "Error: semantic_layer_id is missing. Pass it as an argument or set SEMANTIC_LAYER_ID."
@@ -143,3 +143,127 @@ class SolidGlossarySearchTool(BaseTool):
 
 
 SolidMcpGlossaryTool = SolidGlossarySearchTool
+
+
+class SolidSpecificAssetInformationInput(BaseModel):
+    """Input for the Solid specific asset information tool."""
+
+    question: str = Field(
+        ...,
+        description="Natural-language question about the named table or dashboard.",
+    )
+    asset_name: str = Field(
+        ...,
+        description="Exact name of the table or dashboard (e.g. database.schema.table).",
+    )
+    asset_type: Optional[str] = Field(
+        default=None,
+        description="Optional asset type hint (e.g. table, dashboard).",
+    )
+
+
+class SolidSpecificAssetInformationTool(BaseTool):
+    """CrewAI tool that calls SolidData MCP specific_asset_information_tool."""
+
+    name: str = "solid_specific_asset_information"
+    description: str = (
+        "Get metadata and natural-language answers about one named table or dashboard. "
+        "Use when the user asks about columns, schema, or structure of a specific asset."
+    )
+    args_schema: Type[BaseModel] = SolidSpecificAssetInformationInput
+
+    env_vars: dict = {
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
+        "MCP_SERVER_URL": "Optional. Solid MCP HTTP URL. Defaults to production.",
+        "ASSET_NAME": "Optional. Fallback for asset_name if not passed.",
+        "ASSET_TYPE": "Optional. Fallback for asset_type if not passed.",
+    }
+
+    def _run(
+        self,
+        question: str = "",
+        asset_name: Optional[str] = None,
+        asset_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        q = (question or "").strip() or (kwargs.get("question") and str(kwargs["question"]).strip()) or ""
+        if not q:
+            return "Error: Input 'question' is missing."
+
+        name = (
+            (asset_name or "").strip()
+            or (kwargs.get("asset_name") or "").strip()
+            or (os.environ.get("ASSET_NAME") or "").strip()
+        )
+        if not name:
+            return "Error: asset_name is missing. Pass it as an argument or set ASSET_NAME."
+
+        arguments: dict[str, Any] = {"question": q, "asset_name": name}
+        atype = (
+            (asset_type or "").strip()
+            or (kwargs.get("asset_type") or "").strip()
+            or (os.environ.get("ASSET_TYPE") or "").strip()
+        )
+        if atype:
+            arguments["asset_type"] = atype
+
+        return _run_mcp_tool_sync("specific_asset_information_tool", arguments)
+
+
+SolidMcpAssetTool = SolidSpecificAssetInformationTool
+
+
+class SolidSemanticModelQAInput(BaseModel):
+    """Input for the Solid semantic model Q&A tool."""
+
+    question: str = Field(
+        ...,
+        description="Natural-language question about the semantic model metadata.",
+    )
+    semantic_model_id: str = Field(
+        ...,
+        description="UUID of the SolidData semantic model.",
+    )
+
+
+class SolidSemanticModelQATool(BaseTool):
+    """CrewAI tool that calls SolidData MCP semantic_model_qa."""
+
+    name: str = "solid_semantic_model_qa"
+    description: str = (
+        "Answer questions about a semantic model's metadata — coverage, tables, metrics, and structure. "
+        "Use when the user asks what a model contains or how it is organized."
+    )
+    args_schema: Type[BaseModel] = SolidSemanticModelQAInput
+
+    env_vars: dict = {
+        "SOLIDDATA_MANAGEMENT_KEY": "Required. SolidData Management Key.",
+        "MCP_SERVER_URL": "Optional. Solid MCP HTTP URL. Defaults to production.",
+        "SEMANTIC_MODEL_ID": "Optional. Fallback for semantic_model_id if not passed.",
+    }
+
+    def _run(
+        self,
+        question: str = "",
+        semantic_model_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        q = (question or "").strip() or (kwargs.get("question") and str(kwargs["question"]).strip()) or ""
+        if not q:
+            return "Error: Input 'question' is missing."
+
+        model_id = (
+            (semantic_model_id or "").strip()
+            or (kwargs.get("semantic_model_id") or "").strip()
+            or (os.environ.get("SEMANTIC_MODEL_ID") or "").strip()
+        )
+        if not model_id:
+            return "Error: semantic_model_id is missing. Pass it as an argument or set SEMANTIC_MODEL_ID."
+
+        return _run_mcp_tool_sync(
+            "semantic_model_qa",
+            {"question": q, "semantic_model_id": model_id},
+        )
+
+
+SolidMcpSemanticModelQATool = SolidSemanticModelQATool
