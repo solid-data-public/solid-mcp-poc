@@ -10,6 +10,7 @@ dependencies = [
     "httpx",
     "pydantic-settings>=2.0",
     "python-dotenv",
+    "pyyaml>=6.0",
     "snowflake-connector-python>=3.0",
     "nest-asyncio>=1.6.0",
 ]
@@ -17,10 +18,14 @@ dependencies = [
 [project.scripts]
 soliddata_mcp_poc = "soliddata_mcp_poc.main:run"
 run_crew = "soliddata_mcp_poc.main:run"
+solid_multi_model_crew = "solid_multi_model_crew.main:run"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/soliddata_mcp_poc", "solid_multi_model_crew", "solid_mcp_tool"]
 
 [tool.crewai]
 type = "crew"

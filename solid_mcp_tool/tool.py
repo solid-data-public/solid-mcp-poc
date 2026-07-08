@@ -20,7 +20,7 @@ _MCP_CONNECT_TIMEOUT = 60
 _MCP_TOOL_TIMEOUT = 120
 
 
-def _run_mcp_tool_sync(tool_name: str, arguments: dict[str, Any]) -> str:
+def run_mcp_tool(tool_name: str, arguments: dict[str, Any]) -> str:
     """Connect to Solid MCP over HTTP (streamable), call one tool, disconnect."""
     if nest_asyncio:
         nest_asyncio.apply()
@@ -101,7 +101,7 @@ class SolidMcpTool(BaseTool):
         if not layer_id:
             return "Error: semantic_layer_id is missing. Pass it as an argument or set SEMANTIC_LAYER_ID."
 
-        return _run_mcp_tool_sync(
+        return run_mcp_tool(
             "text2sql",
             {"question": q, "semantic_layer_ids": [layer_id]},
         )
@@ -139,7 +139,7 @@ class SolidGlossarySearchTool(BaseTool):
         if not q:
             return "Error: Input 'query' is missing."
 
-        return _run_mcp_tool_sync("glossary_search", {"query": q})
+        return run_mcp_tool("glossary_search", {"query": q})
 
 
 SolidMcpGlossaryTool = SolidGlossarySearchTool
@@ -207,7 +207,7 @@ class SolidSpecificAssetInformationTool(BaseTool):
         if atype:
             arguments["asset_type"] = atype
 
-        return _run_mcp_tool_sync("specific_asset_information_tool", arguments)
+        return run_mcp_tool("specific_asset_information_tool", arguments)
 
 
 SolidMcpAssetTool = SolidSpecificAssetInformationTool
@@ -260,10 +260,14 @@ class SolidSemanticModelQATool(BaseTool):
         if not model_id:
             return "Error: semantic_model_id is missing. Pass it as an argument or set SEMANTIC_MODEL_ID."
 
-        return _run_mcp_tool_sync(
+        return run_mcp_tool(
             "semantic_model_qa",
             {"question": q, "semantic_model_id": model_id},
         )
+
+
+# Backward-compatible alias
+_run_mcp_tool_sync = run_mcp_tool
 
 
 SolidMcpSemanticModelQATool = SolidSemanticModelQATool

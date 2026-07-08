@@ -1,0 +1,18 @@
+# Marketing domain — copy to marketing_models.yaml and replace placeholder UUIDs
+# with certified semantic layer IDs from Solid.
+# Discover coverage via semantic_model_qa or ask your Solid admin.
+
+domain: marketing
+models:
+  - id: "00000000-0000-4000-8000-000000000001"
+    name: web_attribution
+    label: "Digital Acquisition & Attribution"
+    description: "Signups, traffic sources, devices, regions, and on-site engagement for owned channels."
+  - id: "00000000-0000-4000-8000-000000000002"
+    name: paid_media
+    label: "Paid Media & Ad Spend"
+    description: "Campaign spend, impressions, conversions, and revenue by channel, audience, and geography."
+  - id: "00000000-0000-4000-8000-000000000003"
+    name: organic_search
+    label: "Organic Search Performance"
+    description: "Search visibility, landing-page sessions, and conversions from non-paid discovery."

@@ -160,6 +160,21 @@ soliddata_mcp_poc "How many users signed up last month?"
 1. Crew runs: SQL Analyst calls Solid MCP **text2sql**; if Snowflake connector is configured, the executor runs the SQL in Snowflake and the Reporter summarizes the results; otherwise the Reporter explains what the query does.
 3. **Result is printed in the terminal only** (no file output).
 
+---
+
+## Part 3: Multi-Model Crew (Router + Aggregation)
+
+For questions that span **multiple semantic models** (e.g. Marketing: paid media + web analytics + CRM), use the separate CLI in [`solid_multi_model_crew/`](solid_multi_model_crew/README.md):
+
+```bash
+uv run solid_multi_model_crew --mode both "How did Q1 campaigns perform across paid and organic channels?"
+```
+
+- **`--mode router`** — one `text2sql` with all `semantic_layer_ids`; Solid router picks the best model.
+- **`--mode multi`** — planner decomposes the question, queries each model separately, aggregates analysis.
+- **`--mode both`** (default) — runs router baseline then multi-model synthesis.
+
+Configure models via `MULTI_MODEL_CONFIG` (YAML) or `SEMANTIC_LAYER_IDS` in `.env`. See [`solid_multi_model_crew/README.md`](solid_multi_model_crew/README.md).
 
 ---
 
@@ -397,6 +412,14 @@ solid-mcp-poc/                  # Repo root
 │   ├── __init__.py
 │   ├── tool.py                 # Self-contained: MCP call + env_vars for AMP injection
 │   └── README.md
+├── solid_multi_model_crew/     # Multi-model CLI: router mode + per-model aggregation (see README)
+│   ├── main.py
+│   ├── crew.py
+│   ├── tools.py
+│   ├── config.py
+│   ├── models.py
+│   ├── marketing_models.example.yaml
+│   └── README.md
 └── src/
     └── soliddata_mcp_poc/      # Demo app: MCP crew → terminal output
         ├── __init__.py
@@ -406,7 +429,7 @@ solid-mcp-poc/                  # Repo root
         └── snowflake_connector_tool.py  # Snowflake SQL via connector (username/password; max 1000 rows)
 ```
 
-No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc` and `run_crew` (see `pyproject.toml`).
+No file output; no `config/` YAML (agents/tasks are in code). Entry points: `soliddata_mcp_poc`, `run_crew`, and `solid_multi_model_crew` (see `pyproject.toml`).
 
 **REST bridge (Workato, Copilot Studio, other agents):** An Azure Function App exposes Solid MCP tools as REST (**text2sql**, **glossary_search**, **specific_asset_information_tool**, **semantic_model_qa**). Use it when the consumer only supports HTTP/OpenAPI. The root **openapi.yaml** documents the bridge base URL, paths, bodies, and the shared host `code` default. See [Using the OpenAPI spec](#using-the-openapi-spec-workato-power-platform-etc).
 

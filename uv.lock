@@ -3303,6 +3303,7 @@ dependencies = [
     { name = "nest-asyncio" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "snowflake-connector-python" },
 ]
 
@@ -3314,6 +3315,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "python-dotenv" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "snowflake-connector-python", specifier = ">=3.0" },
 ]
 
